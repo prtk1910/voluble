@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'configure') {
       allow(req, ['PUT']);
       const keys = req.body?.keys as ProviderKeys;
-      if (!keys || Object.values(keys).some((key) => typeof key !== 'string' || key.length < 8)) throw Object.assign(new Error('Provider keys are invalid.'), { status: 400 });
+      if (!keys || !Object.keys(keys).length || Object.values(keys).some((key) => typeof key !== 'string' || key.length < 8)) throw Object.assign(new Error('Provider keys are invalid.'), { status: 400 });
       const plaintext = Buffer.from(JSON.stringify(keys), 'utf8');
       try {
         const envelope = await encryptEnvelope(plaintext);
@@ -42,6 +42,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       allow(req, ['GET']);
       return res.status(200).json(models);
     }
+    if (action === 'status') {
+      allow(req, ['GET']);
+      const file = (await findChildren(token, hidden.id, 'credentials.enc.json'))[0];
+      if (!file) return res.status(200).json({ providers: [] });
+      const envelope = JSON.parse(await fileContent(token, file.id));
+      const providers = await withDecryptedEnvelope(envelope, async (plaintext) => {
+        const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
+        return (['openai', 'gemini'] as ProviderName[]).filter((provider) => Boolean(keys[provider]));
+      });
+      return res.status(200).json({ providers });
+    }
     const { envelope } = await credentialEnvelope(token, hidden.id);
     if (action === 'transcribe') {
       allow(req, ['POST']);
@@ -50,13 +61,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const audio = Buffer.from(String(req.body?.audio ?? ''), 'base64');
       if (!audio.length || audio.length > 8 * 1024 * 1024) throw Object.assign(new Error('Audio chunk must be between 1 byte and 8 MB.'), { status: 413 });
       try {
-        const text = await withDecryptedEnvelope(envelope, async (plaintext) => {
+        const result = await withDecryptedEnvelope(envelope, async (plaintext) => {
           const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
           const key = keys[provider];
           if (!key) throw Object.assign(new Error(`Configure ${provider} first.`), { status: 409 });
           return transcribe(provider, key, audio, String(req.body?.language ?? 'en-US'));
         });
-        return res.status(200).json({ text, model: models[provider].transcription });
+        return res.status(200).json(result);
       } finally { audio.fill(0); }
     }
     if (action === 'cleanup') {

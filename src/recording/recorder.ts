@@ -1,7 +1,7 @@
 import { encodeWav, resample } from './pcm';
 
 const MAX_DURATION_MS = 2 * 60 * 60 * 1000;
-const CHUNK_SECONDS = 20;
+const CHUNK_SECONDS = 5;
 
 export class PcmRecorder {
   private context?: AudioContext;
@@ -55,7 +55,7 @@ type Recognition = { lang: string; continuous: boolean; interimResults: boolean;
 type LocalRecognitionOptions = { langs: string[]; processLocally: true };
 type RecognitionConstructor = (new () => Recognition) & { available?: (options: LocalRecognitionOptions) => Promise<string>; install?: (options: LocalRecognitionOptions) => Promise<boolean> };
 
-export async function localRecognition(language: string, onText: (text: string) => void, onEnd: () => void, onError: (error: string) => void = onEnd): Promise<Recognition | undefined> {
+export async function localRecognition(language: string, onText: (text: string) => void, onEnd: () => void, onError: (error: string) => void = onEnd, onInterim: (text: string) => void = () => undefined): Promise<Recognition | undefined> {
   const Constructor = (window as unknown as { SpeechRecognition?: RecognitionConstructor; webkitSpeechRecognition?: RecognitionConstructor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: RecognitionConstructor }).webkitSpeechRecognition;
   if (!Constructor) return undefined;
   if (Constructor.available) {
@@ -69,10 +69,15 @@ export async function localRecognition(language: string, onText: (text: string) 
     if (availability !== 'available') throw new Error(`The ${language} on-device language pack did not become available. Try again, or choose cloud transcription in Settings.`);
   }
   const recognition = new Constructor();
-  recognition.lang = language; recognition.continuous = true; recognition.interimResults = false;
+  recognition.lang = language; recognition.continuous = true; recognition.interimResults = true;
   if ('processLocally' in recognition) recognition.processLocally = true;
   recognition.onresult = (event) => {
-    for (let index = event.resultIndex; index < event.results.length; index += 1) if (event.results[index].isFinal) onText(event.results[index][0].transcript);
+    let interim = '';
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      if (event.results[index].isFinal) onText(event.results[index][0].transcript);
+      else interim += `${interim ? ' ' : ''}${event.results[index][0].transcript}`;
+    }
+    onInterim(interim);
   };
   recognition.onerror = (event) => onError(event.error); recognition.onend = onEnd;
   return recognition;

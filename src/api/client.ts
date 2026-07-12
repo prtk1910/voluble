@@ -1,6 +1,6 @@
 import { withRetry } from '../sync/backoff';
 import { enqueue, removeOperation, stageDeletion, updateDeletionFileId } from '../sync/outbox';
-import type { VolubleRecord } from '../domain/record';
+import type { CleanedResponse, VolubleRecord } from '../domain/record';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string) { super(message); }
@@ -58,8 +58,9 @@ export const api = {
     });
   },
   configureProviders: (keys: { openai?: string; gemini?: string }) => request('/api/provider/configure', { method: 'PUT', body: JSON.stringify({ keys }) }),
+  providerStatus: () => request<{ providers: Array<'openai' | 'gemini'> }>('/api/provider/status'),
   transcribe: (provider: 'openai' | 'gemini', audio: string, language: string) => request<{ text: string; model: string }>('/api/provider/transcribe', { method: 'POST', body: JSON.stringify({ provider, audio, language }) }),
-  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string, timezone: string) => request<{ result: Omit<VolubleRecord, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion' | 'language' | 'status' | 'provenance' | 'originalTranscript' | 'drive'>; model: string }>('/api/provider/cleanup', {
+  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string, timezone: string) => request<{ result: CleanedResponse; model: string }>('/api/provider/cleanup', {
     method: 'POST',
     body: JSON.stringify({
       provider, transcript, language,

@@ -12,8 +12,8 @@ import { allow, fail } from '../../server/http.js';
 const secret = () => new TextEncoder().encode(config.sessionSecret);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const action = String(req.query.action ?? '');
   try {
-    const action = String(req.query.action ?? '');
     if (action === 'login') {
       allow(req, ['GET']);
       const state = await new SignJWT({ nonce: crypto.randomBytes(16).toString('hex') }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('10m').sign(secret());
@@ -66,5 +66,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ driveContentPreserved: true });
     }
     throw Object.assign(new Error('Unknown authentication action.'), { status: 404 });
-  } catch (error) { fail(res, error); }
+  } catch (error) {
+    if (action === 'callback' || action === 'login') return res.redirect(302, `${config.appUrl}/?auth_error=google`);
+    fail(res, error);
+  }
 }

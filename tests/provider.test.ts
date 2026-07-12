@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup } from '../server/provider';
+import { cleanup, transcribe } from '../server/provider';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -51,4 +51,19 @@ it('discards calendar fields when the result is not a reminder', async () => {
   const result = await cleanup('openai', 'test-key', 'A project update.', 'en-US');
   expect(result.category).toBe('Notes');
   expect(result.event).toBeUndefined();
+});
+
+it('returns complete suggestions when a transcript should become multiple records', async () => {
+  const reminder = { title: 'Visit Trader Joe’s', category: 'Reminders', content: 'Go to Trader Joe’s.', tags: [], tasks: [], event: { start: '2026-07-13T17:00:00.000Z', end: null, location: 'Trader Joe’s', allDay: false } };
+  const shopping = { title: 'Trader Joe’s list', category: 'Shopping Lists', content: 'Buy vegetables.', tags: [], tasks: [{ text: 'Onions', completed: false }, { text: 'Tomatoes', completed: false }], event: null };
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output: [{ content: [{ text: JSON.stringify({ ...reminder, splitSuggestions: [reminder, shopping] }) }] }] }), { status: 200 }));
+  const result = await cleanup('openai', 'test-key', 'Remind me to go to Trader Joe’s and buy onions and tomatoes.', 'en-US');
+  expect(result.splitSuggestions.map((item) => item.category)).toEqual(['Reminders', 'Shopping Lists']);
+  expect(result.splitSuggestions[1].event).toBeUndefined();
+});
+
+it('formats diarized OpenAI transcription segments as speaker blocks', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ text: 'Hello. Hi.', segments: [{ speaker: 'Speaker 1', text: 'Hello.' }, { speaker: 'Speaker 2', text: 'Hi.' }] }), { status: 200 }));
+  const result = await transcribe('openai', 'test-key', new Uint8Array([1, 2, 3]), 'en-US');
+  expect(result).toEqual({ text: 'Speaker 1: Hello.\nSpeaker 2: Hi.', model: 'gpt-4o-transcribe-diarize' });
 });

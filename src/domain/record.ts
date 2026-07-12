@@ -57,7 +57,7 @@ export function createRecord(input: Partial<VolubleRecord> & Pick<VolubleRecord,
   });
 }
 
-export const cleanedResponseSchema = z.object({
+const cleanedCandidateFields = {
   title: z.string().min(1).max(200),
   category: z.enum(categories),
   content: z.string(),
@@ -69,4 +69,10 @@ export const cleanedResponseSchema = z.object({
     location: z.string().optional(),
     allDay: z.boolean().default(false)
   }).optional()
+};
+
+export const cleanedResponseSchema = z.object({
+  ...cleanedCandidateFields,
+  splitSuggestions: z.array(z.object(cleanedCandidateFields)).max(6).default([])
 });
+export type CleanedResponse = z.infer<typeof cleanedResponseSchema>;

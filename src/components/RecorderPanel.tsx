@@ -6,22 +6,29 @@ import { localRecognition, PcmRecorder } from '../recording/recorder';
 import { toBase64 } from '../recording/pcm';
 
 type CloudProvider = 'openai' | 'gemini';
-type Props = { provider: 'local' | CloudProvider; fallbackProvider: CloudProvider; cleanupProvider: 'none' | CloudProvider; language: string; timezone: string; onRecord(record: VolubleRecord): void; onClose(): void };
+type CleanupResult = Awaited<ReturnType<typeof api.cleanup>>['result'];
+type CleanupCandidate = Omit<CleanupResult, 'splitSuggestions'>;
+type Props = { provider: 'local' | CloudProvider; fallbackProvider: CloudProvider; cleanupProvider: 'none' | CloudProvider; language: string; timezone: string; onRecords(records: VolubleRecord[]): void; onClose(): void };
 
-export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, language, timezone, onRecord, onClose }: Props) {
+export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, language, timezone, onRecords, onClose }: Props) {
   const [state, setState] = useState<'ready' | 'preparing' | 'recording' | 'processing' | 'error'>('ready');
   const [transcript, setTranscript] = useState('');
+  const [interim, setInterim] = useState('');
   const [error, setError] = useState('');
   const [seconds, setSeconds] = useState(0);
+  const [splitDecision, setSplitDecision] = useState<{ result: CleanupResult; model: string }>();
   const recorder = useRef<PcmRecorder | undefined>(undefined);
   const recognition = useRef<Awaited<ReturnType<typeof localRecognition>>>(undefined);
   const queue = useRef(Promise.resolve());
   const activeProvider = useRef<'local' | CloudProvider>(provider);
+  const transcriptionModel = useRef<string | undefined>(undefined);
   const fallbackStarting = useRef<Promise<void> | undefined>(undefined);
   const stopping = useRef(false);
+  const interimRef = useRef('');
   useEffect(() => { if (state !== 'recording') return; const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000); return () => clearInterval(timer); }, [state]);
 
-  const append = (text: string) => setTranscript((current) => `${current}${current ? ' ' : ''}${text.trim()}`);
+  const append = (text: string) => { setTranscript((current) => `${current}${current ? ' ' : ''}${text.trim()}`); setInterim(''); interimRef.current = ''; };
+  const showInterim = (text: string) => { interimRef.current = text.trim(); setInterim(interimRef.current); };
   const startCloud = async (cloudProvider: CloudProvider, reason?: string) => {
     if (fallbackStarting.current) return fallbackStarting.current;
     const work = (async () => {
@@ -29,7 +36,7 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
       activeProvider.current = cloudProvider;
       recorder.current = new PcmRecorder(async (wav) => {
         const encoded = toBase64(wav);
-        queue.current = queue.current.then(async () => append((await api.transcribe(cloudProvider, encoded, language)).text));
+        queue.current = queue.current.then(async () => { const result = await api.transcribe(cloudProvider, encoded, language); transcriptionModel.current = result.model; append(result.text); });
         await queue.current;
       }, () => setError('The two-hour recording limit was reached.'));
       await recorder.current.start();
@@ -53,7 +60,7 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
     setError(''); setState('preparing'); setSeconds(0); stopping.current = false; queue.current = Promise.resolve(); activeProvider.current = provider;
     try {
       if (provider === 'local') {
-        const local = await localRecognition(language, append, () => { if (!stopping.current) void fallback(new Error('On-device recognition stopped unexpectedly.')); }, (code) => void fallback(code));
+        const local = await localRecognition(language, append, () => { if (!stopping.current) void fallback(new Error('On-device recognition stopped unexpectedly.')); }, (code) => void fallback(code), showInterim);
         if (!local) throw new Error('On-device speech recognition is unavailable in this browser.');
         recognition.current = local; local.start(); setState('recording');
       } else {
@@ -63,7 +70,7 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
   };
   const stop = async () => {
     stopping.current = true; setState('processing');
-    try { recognition.current?.stop(); await recorder.current?.stop(); await queue.current; recognition.current = undefined; recorder.current = undefined; setState('ready'); }
+    try { if (interimRef.current && recognition.current) { recognition.current.onresult = null; append(interimRef.current); } recognition.current?.stop(); await recorder.current?.stop(); await queue.current; recognition.current = undefined; recorder.current = undefined; setState('ready'); }
     catch (cause) { setState('error'); setError(cause instanceof Error ? cause.message : 'Transcription failed.'); }
   };
   const create = async () => {
@@ -71,23 +78,27 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
     setState('processing');
     try {
       if (cleanupProvider === 'none') {
-        onRecord(createRecord({ title: transcript.trim().slice(0, 70), content: transcript, originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, cleanup: 'none' } }));
+        onRecords([createRecord({ title: transcript.trim().slice(0, 70), content: transcript, originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: 'none' } })]);
       } else {
         const { result, model } = await api.cleanup(cleanupProvider, transcript, language, timezone);
-        onRecord(createRecord({ ...result, tasks: result.tasks.map((task) => ({ ...task, id: crypto.randomUUID() })), originalTranscript: transcript, provenance: { transcription: activeProvider.current, cleanup: cleanupProvider, cleanupModel: model } }));
+        if (result.splitSuggestions.length > 1) { setSplitDecision({ result, model }); setState('ready'); return; }
+        onRecords([recordFromCandidate(result, model)]);
       }
       onClose();
     } catch (cause) {
-      onRecord(createRecord({ title: transcript.slice(0, 70), content: '', originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, cleanup: cleanupProvider } }));
+      onRecords([createRecord({ title: transcript.slice(0, 70), content: '', originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: cleanupProvider } })]);
       setState('error'); setError(`${cause instanceof Error ? cause.message : 'Processing failed.'} The transcript was preserved as a pending record.`);
     }
   };
+  const recordFromCandidate = (candidate: CleanupCandidate, model: string) => createRecord({ ...candidate, tasks: candidate.tasks.map((task) => ({ ...task, id: crypto.randomUUID() })), originalTranscript: transcript, provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: cleanupProvider, cleanupModel: model } });
+  const chooseSplit = (candidates: CleanupCandidate[]) => { if (!splitDecision) return; onRecords(candidates.map((candidate) => recordFromCandidate(candidate, splitDecision.model))); onClose(); };
   return <div className="modal-backdrop"><section className="recorder-panel" role="dialog" aria-modal="true" aria-label="Record a thought">
     <header><div><span className="eyebrow">New capture</span><h2>Speak naturally</h2></div><button className="icon-button" onClick={onClose}><X /></button></header>
     <div className={`orb ${state === 'recording' ? 'active' : ''}`}><Mic /><span>{state === 'recording' ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : state === 'preparing' ? 'Preparing…' : state === 'processing' ? 'Working…' : 'Ready'}</span></div>
     <p className="privacy-note">Audio stays in memory and is discarded after transcription. It is never saved to Drive or this device.</p>
-    <textarea aria-label="Transcript" rows={7} placeholder="Your transcript will appear here…" value={transcript} onChange={(event) => setTranscript(event.target.value)} />
+    <textarea aria-label="Transcript" rows={7} placeholder="Your transcript will appear here…" value={`${transcript}${interim ? `${transcript ? ' ' : ''}${interim}` : ''}`} onChange={(event) => { setTranscript(event.target.value); showInterim(''); }} />
+    {splitDecision && <div className="split-suggestion"><strong>This capture contains multiple kinds of records.</strong><p>Voluble suggests splitting it so each item stays useful.</p><div>{splitDecision.result.splitSuggestions.map((suggestion) => <button key={`${suggestion.category}:${suggestion.title}`} onClick={() => chooseSplit([suggestion])}>{suggestion.category}: {suggestion.title}</button>)}</div><button className="primary" onClick={() => chooseSplit(splitDecision.result.splitSuggestions)}>Create all {splitDecision.result.splitSuggestions.length} suggested records</button><button className="ghost" onClick={() => chooseSplit([splitDecision.result])}>Keep as one {splitDecision.result.category}</button></div>}
     {error && <div className="notice error">{error}</div>}
-    <footer>{state === 'recording' ? <button className="stop" onClick={stop}><CircleStop /> Stop recording</button> : <button className="primary" onClick={start} disabled={state === 'preparing' || state === 'processing'}><Mic /> Start recording</button>}<button className="accent" onClick={create} disabled={!transcript.trim() || state === 'preparing' || state === 'recording' || state === 'processing'}><Sparkles /> Make record</button></footer>
+    {!splitDecision && <footer>{state === 'recording' ? <button className="stop" onClick={stop}><CircleStop /> Stop recording</button> : <button className="primary" onClick={start} disabled={state === 'preparing' || state === 'processing'}><Mic /> Start recording</button>}<button className="accent" onClick={create} disabled={!transcript.trim() || state === 'preparing' || state === 'recording' || state === 'processing'}><Sparkles /> Make record</button></footer>}
   </section></div>;
 }

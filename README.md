@@ -25,7 +25,7 @@ Select a preview to view it at full size.
 - Stores cleaned content alongside the original transcript for auditability.
 - Searches, sorts, filters, edits, recategorizes, completes, archives, and trashes records.
 - Synchronizes multiple devices through a user-selected Google Drive folder.
-- Preserves conflicting versions and resolves them in the Conflict Center.
+- Resolves concurrent Drive edits automatically by keeping the newest timestamp.
 - Generates adjacent `.ics` calendar files and Google Calendar links without requesting Calendar access.
 - Queues text-only changes offline and retries them when connectivity returns.
 - Installs as a PWA where the browser exposes installation support.
@@ -34,7 +34,7 @@ Select a preview to view it at full size.
 
 ### 1. Sign in and choose a Drive folder
 
-Select **Start with Google**, approve the requested `drive.file` permission, and either choose an existing folder with Google Picker or create a new folder in My Drive from Voluble. Voluble creates its category structure inside the selected folder and never silently switches to a different folder.
+Select **Start with Google**, approve the requested `drive.file` permission, and either choose an existing folder with Google Picker or create a new folder in My Drive from Voluble. Folder selection is the first onboarding step; provider API keys remain locked until it is complete. Voluble creates its category structure inside the selected folder and never silently switches to a different folder.
 
 The resulting structure is:
 
@@ -66,7 +66,7 @@ If OpenAI or Gemini is selected, enter the corresponding provider key in Setting
 
 ### 3. Capture a record
 
-Select **New capture** or **Capture**, start recording, and speak normally. During cloud transcription, Voluble converts microphone input to small 16 kHz mono WAV chunks in memory, sends them sequentially, and overwrites mutable audio buffers after use.
+Select **New capture** or **Capture**, start recording, and speak normally. Local interim results appear as you speak. During cloud transcription, Voluble converts microphone input to small 16 kHz mono WAV chunks in memory, sends them about every five seconds, and overwrites mutable audio buffers after use.
 
 If on-device recognition is unavailable, Voluble explains why and directs you to choose a cloud provider. If cleanup fails, the original transcript is preserved as a pending record. After correcting the provider or configuration issue, use **Retry processing** on that record to force another cleanup attempt without recording the audio again.
 
@@ -79,16 +79,11 @@ For records with event data:
 - **Google Calendar** opens a prefilled, user-initiated calendar page.
 - **ICS** downloads a standards-based calendar file for Apple Calendar and other clients.
 
-Use **Export index** to download the disposable local index. The Markdown and ICS files in Drive already form the canonical, portable export.
+Use **Export** to download either a ZIP of portable Markdown files or a complete JSON index. The Markdown and ICS files in Drive remain the canonical copy.
 
-### 5. Resolve synchronization conflicts
+### 5. Synchronize edits
 
-If Drive changed since the local copy was edited, Voluble does not overwrite either version. Open **Conflict Center** and choose one of these outcomes:
-
-- Keep the Drive version.
-- Keep the local version.
-- Merge the versions.
-- Keep both as separate records.
+If Drive and the local copy changed concurrently, Voluble compares their `updatedAt` timestamps and automatically keeps the newest version. Newer local edits are retried against the latest Drive file version.
 
 ### 6. Understand account actions
 
@@ -103,7 +98,7 @@ If Drive changed since the local copy was edited, Voluble does not overwrite eit
 - Provider credentials are fetched, unwrapped, and decrypted for one provider invocation only. Mutable plaintext buffers are overwritten in `finally` blocks and are not stored in module globals or cross-request caches.
 - Application code does not log request bodies, authorization headers, audio, transcripts, provider keys, or KMS plaintext.
 - Audio is not written to Drive, IndexedDB, Cache Storage, backend disk, or provider file-upload storage.
-- OpenAI cleanup uses the pinned `gpt-5.4-mini-2026-03-17` snapshot with Responses API storage disabled. OpenAI transcription uses `gpt-4o-mini-transcribe`.
+- OpenAI cleanup uses the pinned `gpt-5.4-mini-2026-03-17` snapshot with Responses API storage disabled. OpenAI transcription prefers `gpt-4o-transcribe-diarize` for speaker blocks and falls back to `gpt-4o-mini-transcribe` when diarization is unavailable.
 - JavaScript garbage collection cannot guarantee physical memory erasure. The practical boundary is short-lived process/request isolation, no plaintext reuse between requests, reference release, and overwriting mutable buffers where possible.
 
 ## Browser Support
@@ -134,8 +129,8 @@ api/                 Vercel authentication, Drive, and provider endpoints
 server/              OAuth, sessions, database, Drive, KMS, and provider helpers
 src/api/             Browser API client and serialized mutation queue
 src/auth/            Drive/token state transitions
-src/components/      Library, recorder, settings, editor, and conflicts UI
-src/domain/          Record schemas, Markdown, conflicts, and ICS generation
+src/components/      Library, recorder, settings, editor, onboarding, and export UI
+src/domain/          Record schemas, Markdown, time zones, and ICS generation
 src/drive/           Google Picker integration
 src/recording/       AudioWorklet capture, resampling, and WAV encoding
 src/search/          Disposable local full-text filtering and sorting
@@ -264,7 +259,7 @@ Live OAuth, Picker, Drive, KMS, provider, revocation, and account-deletion verif
 - UUID app properties make uncertain create retries idempotent.
 - Retryable quota and server responses use `Retry-After` or full-jitter exponential backoff capped at 32 seconds and six attempts.
 - Exhausted operations enter an IndexedDB outbox containing text records only.
-- Authentication failures, quota exhaustion, conflicts, and ordinary network failures are reported separately.
+- Authentication failures, quota exhaustion, concurrent edits, and ordinary network failures are reported separately.
 - After revoked consent or repeated authorization failures, Drive writes stop, pending local text is retained, and cached Drive records become read-only until re-consent.
 - Folder reselection is requested only when the selected folder is no longer accessible.
 
@@ -296,4 +291,4 @@ Check connectivity and Drive connection state. Bring the app to the foreground o
 
 ## OpenAI API References
 
-The OpenAI provider implementation follows the official [GPT-5.4 mini model documentation](https://developers.openai.com/api/docs/models/gpt-5.4-mini), [structured outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs), and [GPT-4o mini Transcribe documentation](https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe).
+The OpenAI provider implementation follows the official [GPT-5.4 mini model documentation](https://developers.openai.com/api/docs/models/gpt-5.4-mini), [structured outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs), [GPT-4o Transcribe Diarize documentation](https://developers.openai.com/api/docs/models/gpt-4o-transcribe-diarize), and [GPT-4o mini Transcribe documentation](https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe).
