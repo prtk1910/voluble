@@ -20,10 +20,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
-        runtimeCaching: [{
-          urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
-          handler: 'NetworkOnly'
-        }]
+        navigateFallbackDenylist: [/^\/api\//]
       }
     })
   ]
