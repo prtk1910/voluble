@@ -1,13 +1,13 @@
 import crypto from 'node:crypto';
-import type { VercelRequest, VercelResponse } from '../../server/vercel';
+import type { VercelRequest, VercelResponse } from '../../server/vercel.js';
 import { SignJWT, jwtVerify } from 'jose';
 import { sql } from '@vercel/postgres';
-import { authorizationUrl, exchangeCode, revoke, verifyGoogleIdToken } from '../../server/google';
-import { config } from '../../server/config';
-import { createSession, hashSession, upsertAccount } from '../../server/db';
-import { clearSession, requireSession, setSession } from '../../server/session';
-import { encryptEnvelope } from '../../server/security';
-import { allow, fail } from '../../server/http';
+import { authorizationUrl, exchangeCode, revoke, verifyGoogleIdToken } from '../../server/google.js';
+import { config } from '../../server/config.js';
+import { createSession, hashSession, upsertAccount } from '../../server/db.js';
+import { clearSession, requireSession, setSession } from '../../server/session.js';
+import { encryptEnvelope } from '../../server/security.js';
+import { allow, fail } from '../../server/http.js';
 
 const secret = () => new TextEncoder().encode(config.sessionSecret);
 

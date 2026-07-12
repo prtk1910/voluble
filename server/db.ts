@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { sql } from '@vercel/postgres';
-import type { Envelope } from './security';
+import type { Envelope } from './security.js';
 
 export async function ensureSchema(): Promise<void> {
   await sql`CREATE TABLE IF NOT EXISTS voluble_accounts (

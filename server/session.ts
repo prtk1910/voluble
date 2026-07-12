@@ -1,5 +1,5 @@
-import type { VercelRequest, VercelResponse } from './vercel';
-import { sessionAccount } from './db';
+import type { VercelRequest, VercelResponse } from './vercel.js';
+import { sessionAccount } from './db.js';
 
 const COOKIE = 'voluble_session';
 const cookies = (header = '') => Object.fromEntries(header.split(';').map((item) => item.trim().split('=').map(decodeURIComponent)).filter((item) => item.length === 2));

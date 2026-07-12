@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import { recordSchema, type VolubleRecord } from './record';
+import { recordSchema, type VolubleRecord } from './record.js';
 
 const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const TRANSCRIPT_HEADING = /^## Original transcript\s*$/im;

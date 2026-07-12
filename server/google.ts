@@ -1,6 +1,6 @@
-import { config } from './config';
-import type { Envelope } from './security';
-import { withDecryptedEnvelope } from './security';
+import { config } from './config.js';
+import type { Envelope } from './security.js';
+import { withDecryptedEnvelope } from './security.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const oauthBase = 'https://oauth2.googleapis.com';

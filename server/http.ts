@@ -1,5 +1,5 @@
-import type { VercelRequest, VercelResponse } from './vercel';
-import { safeError } from './redact';
+import type { VercelRequest, VercelResponse } from './vercel.js';
+import { safeError } from './redact.js';
 
 export function allow(req: VercelRequest, methods: string[]): void {
   if (!req.method || !methods.includes(req.method)) throw Object.assign(new Error('Method not allowed.'), { status: 405 });

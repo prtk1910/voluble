@@ -1,4 +1,4 @@
-import { cleanedResponseSchema } from '../src/domain/record';
+import { cleanedResponseSchema } from '../src/domain/record.js';
 
 export type ProviderName = 'openai' | 'gemini';
 export type ProviderKeys = Partial<Record<ProviderName, string>>;

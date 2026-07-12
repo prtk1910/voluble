@@ -1,10 +1,10 @@
-import type { VercelRequest, VercelResponse } from '../../server/vercel';
-import { requireSession } from '../../server/session';
-import { accessToken } from '../../server/google';
-import { createFile, fileContent, findChildren, updateFile } from '../../server/drive';
-import { allow, fail } from '../../server/http';
-import { encryptEnvelope, withDecryptedEnvelope } from '../../server/security';
-import { cleanup, models, transcribe, type ProviderKeys, type ProviderName } from '../../server/provider';
+import type { VercelRequest, VercelResponse } from '../../server/vercel.js';
+import { requireSession } from '../../server/session.js';
+import { accessToken } from '../../server/google.js';
+import { createFile, fileContent, findChildren, updateFile } from '../../server/drive.js';
+import { allow, fail } from '../../server/http.js';
+import { encryptEnvelope, withDecryptedEnvelope } from '../../server/security.js';
+import { cleanup, models, transcribe, type ProviderKeys, type ProviderName } from '../../server/provider.js';
 
 async function context(req: VercelRequest) {
   const { account } = await requireSession(req);

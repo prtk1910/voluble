@@ -1,4 +1,4 @@
-import type { VolubleRecord } from './record';
+import type { VolubleRecord } from './record.js';
 
 const escape = (value: string) => value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
 const stamp = (value: string) => new Date(value).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');

@@ -1,4 +1,4 @@
-import { createRecord, type VolubleRecord } from './record';
+import { createRecord, type VolubleRecord } from './record.js';
 
 export type Conflict = {
   id: string;

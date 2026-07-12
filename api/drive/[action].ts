@@ -1,12 +1,12 @@
-import type { VercelRequest, VercelResponse } from '../../server/vercel';
+import type { VercelRequest, VercelResponse } from '../../server/vercel.js';
 import { sql } from '@vercel/postgres';
-import { requireSession } from '../../server/session';
-import { accessToken } from '../../server/google';
-import { allow, fail } from '../../server/http';
-import { changesSince, createFile, ensureFolder, fileContent, findByUuid, findChildren, findEventFiles, getFile, startPageToken, trashFile, updateFile } from '../../server/drive';
-import { categories, recordSchema } from '../../src/domain/record';
-import { parseRecord, recordFilename, serializeRecord } from '../../src/domain/markdown';
-import { generateIcs } from '../../src/domain/ics';
+import { requireSession } from '../../server/session.js';
+import { accessToken } from '../../server/google.js';
+import { allow, fail } from '../../server/http.js';
+import { changesSince, createFile, ensureFolder, fileContent, findByUuid, findChildren, findEventFiles, getFile, startPageToken, trashFile, updateFile } from '../../server/drive.js';
+import { categories, recordSchema } from '../../src/domain/record.js';
+import { parseRecord, recordFilename, serializeRecord } from '../../src/domain/markdown.js';
+import { generateIcs } from '../../src/domain/ics.js';
 
 const metaFolder = '.voluble';
 

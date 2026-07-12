@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { KeyManagementServiceClient } from '@google-cloud/kms';
-import { config } from './config';
+import { config } from './config.js';
 
 export type Envelope = {
   version: 1;
