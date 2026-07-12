@@ -4,6 +4,10 @@ Voluble turns speech into useful tasks, reminders, notes, meeting minutes, and l
 
 Voluble is a responsive React PWA with Vercel serverless APIs, Google OAuth and Drive, PostgreSQL for minimal account metadata, and Google Cloud KMS for credential encryption.
 
+## Demo
+
+[Watch the Voluble demo on Google Drive](https://drive.google.com/file/d/1yM1_VAQMQtuS7MqfJzauPhgtlKk0XWUY/view?usp=sharing)
+
 ## What Voluble Does
 
 - Captures up to two hours of speech without intentionally persisting audio.
