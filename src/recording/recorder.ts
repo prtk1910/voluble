@@ -17,9 +17,7 @@ export class PcmRecorder {
     if (!navigator.mediaDevices?.getUserMedia || !window.AudioContext || !('AudioWorkletNode' in window)) throw new Error('This browser cannot capture microphone audio. Try a current browser or another device.');
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
     this.context = new AudioContext();
-    const processor = `class VolubleProcessor extends AudioWorkletProcessor { process(inputs) { const channel=inputs[0]?.[0]; if(channel) this.port.postMessage(channel.slice()); return true; } } registerProcessor('voluble-pcm', VolubleProcessor);`;
-    const url = URL.createObjectURL(new Blob([processor], { type: 'text/javascript' }));
-    try { await this.context.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+    await this.context.audioWorklet.addModule('/pcm-worklet.js');
     const source = this.context.createMediaStreamSource(this.stream);
     this.node = new AudioWorkletNode(this.context, 'voluble-pcm');
     this.node.port.onmessage = (event: MessageEvent<Float32Array>) => {
@@ -54,16 +52,21 @@ export class PcmRecorder {
 }
 
 type Recognition = { lang: string; continuous: boolean; interimResults: boolean; processLocally?: boolean; start(): void; stop(): void; onresult: ((event: { resultIndex: number; results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null; onerror: ((event: { error: string }) => void) | null; onend: (() => void) | null };
-type RecognitionConstructor = (new () => Recognition) & { available?: (options: { langs: string[]; processLocally: boolean }) => Promise<string>; install?: (options: { langs: string[] }) => Promise<boolean> };
+type LocalRecognitionOptions = { langs: string[]; processLocally: true };
+type RecognitionConstructor = (new () => Recognition) & { available?: (options: LocalRecognitionOptions) => Promise<string>; install?: (options: LocalRecognitionOptions) => Promise<boolean> };
 
-export async function localRecognition(language: string, onText: (text: string) => void, onEnd: () => void): Promise<Recognition | undefined> {
+export async function localRecognition(language: string, onText: (text: string) => void, onEnd: () => void, onError: (error: string) => void = onEnd): Promise<Recognition | undefined> {
   const Constructor = (window as unknown as { SpeechRecognition?: RecognitionConstructor; webkitSpeechRecognition?: RecognitionConstructor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: RecognitionConstructor }).webkitSpeechRecognition;
   if (!Constructor) return undefined;
   if (Constructor.available) {
-    const availability = await Constructor.available({ langs: [language], processLocally: true });
+    const options: LocalRecognitionOptions = { langs: [language], processLocally: true };
+    let availability = await Constructor.available(options);
     if (availability === 'downloadable' || availability === 'downloading') {
-      if (!Constructor.install || !await Constructor.install({ langs: [language] })) throw new Error(`The ${language} on-device language pack could not be installed. Choose cloud transcription in Settings.`);
+      if (!Constructor.install || !await Constructor.install(options)) throw new Error(`Chrome could not download the ${language} on-device language pack. Confirm Chrome is up to date and online, then try again—or choose cloud transcription in Settings.`);
+      availability = await Constructor.available(options);
+      if (availability === 'downloading') throw new Error(`The ${language} language pack is still downloading. Wait a moment, then press Start recording again.`);
     } else if (availability !== 'available') throw new Error(`On-device recognition is unavailable for ${language}. Choose cloud transcription in Settings.`);
+    if (availability !== 'available') throw new Error(`The ${language} on-device language pack did not become available. Try again, or choose cloud transcription in Settings.`);
   }
   const recognition = new Constructor();
   recognition.lang = language; recognition.continuous = true; recognition.interimResults = false;
@@ -71,6 +74,6 @@ export async function localRecognition(language: string, onText: (text: string) 
   recognition.onresult = (event) => {
     for (let index = event.resultIndex; index < event.results.length; index += 1) if (event.results[index].isFinal) onText(event.results[index][0].transcript);
   };
-  recognition.onerror = () => onEnd(); recognition.onend = onEnd;
+  recognition.onerror = (event) => onError(event.error); recognition.onend = onEnd;
   return recognition;
 }

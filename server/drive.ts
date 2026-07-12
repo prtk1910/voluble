@@ -1,7 +1,17 @@
 const driveBase = 'https://www.googleapis.com/drive/v3';
 const uploadBase = 'https://www.googleapis.com/upload/drive/v3';
 
-export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string; version?: string; md5Checksum?: string; parents?: string[] };
+export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string; version?: string; md5Checksum?: string; parents?: string[]; trashed?: boolean };
+export type DriveChange = { fileId: string; removed?: boolean; file?: DriveFile };
+
+export function partitionChanges(changes: DriveChange[]): { files: DriveFile[]; removed: string[] } {
+  const files: DriveFile[] = []; const removed: string[] = [];
+  for (const change of changes) {
+    if (change.removed || !change.file || change.file.trashed) removed.push(change.fileId);
+    else files.push(change.file);
+  }
+  return { files, removed };
+}
 
 async function request<T>(token: string, url: string, init: RequestInit = {}, responseType: 'json' | 'text' = 'json'): Promise<T> {
   const response = await fetch(url, { ...init, headers: { Authorization: `Bearer ${token}`, ...init.headers } });
@@ -26,9 +36,9 @@ export async function changesSince(token: string, cursor: string): Promise<{ fil
   const files: DriveFile[] = []; const removed: string[] = [];
   while (pageToken) {
     const queryPageToken: string = pageToken;
-    const params: URLSearchParams = new URLSearchParams({ pageToken: queryPageToken, spaces: 'drive', includeRemoved: 'true', fields: 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,modifiedTime,version,parents))' });
-    const page: { nextPageToken?: string; newStartPageToken?: string; changes: Array<{ fileId: string; removed?: boolean; file?: DriveFile }> } = await request(token, `${driveBase}/changes?${params}`);
-    for (const change of page.changes) change.removed || !change.file ? removed.push(change.fileId) : files.push(change.file);
+    const params: URLSearchParams = new URLSearchParams({ pageToken: queryPageToken, spaces: 'drive', includeRemoved: 'true', fields: 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,modifiedTime,version,parents,trashed))' });
+    const page: { nextPageToken?: string; newStartPageToken?: string; changes: DriveChange[] } = await request(token, `${driveBase}/changes?${params}`);
+    const partitioned = partitionChanges(page.changes); files.push(...partitioned.files); removed.push(...partitioned.removed);
     pageToken = page.nextPageToken;
     finalCursor = page.newStartPageToken ?? finalCursor;
   }
@@ -52,6 +62,11 @@ export function getFile(token: string, id: string): Promise<DriveFile> {
 export async function findByUuid(token: string, uuid: string): Promise<DriveFile | undefined> {
   const params = new URLSearchParams({ q: `appProperties has { key='volubleId' and value='${uuid.replace(/'/g, '')}' } and trashed=false`, fields: 'files(id,name,mimeType,modifiedTime,version,parents)', pageSize: '2' });
   return (await request<{ files: DriveFile[] }>(token, `${driveBase}/files?${params}`)).files[0];
+}
+
+export async function findEventFiles(token: string, uuid: string): Promise<DriveFile[]> {
+  const params = new URLSearchParams({ q: `appProperties has { key='volubleEventId' and value='${uuid.replace(/'/g, '')}' } and trashed=false`, fields: 'files(id,name,mimeType,modifiedTime,version,parents)', pageSize: '100' });
+  return (await request<{ files: DriveFile[] }>(token, `${driveBase}/files?${params}`)).files;
 }
 
 export async function createFile(token: string, metadata: Record<string, unknown>, content = '', mimeType = 'text/plain'): Promise<DriveFile> {

@@ -3,7 +3,7 @@ import { sql } from '@vercel/postgres';
 import { requireSession } from '../../server/session';
 import { accessToken } from '../../server/google';
 import { allow, fail } from '../../server/http';
-import { changesSince, createFile, ensureFolder, fileContent, findByUuid, findChildren, getFile, startPageToken, trashFile, updateFile } from '../../server/drive';
+import { changesSince, createFile, ensureFolder, fileContent, findByUuid, findChildren, findEventFiles, getFile, startPageToken, trashFile, updateFile } from '../../server/drive';
 import { categories, recordSchema } from '../../src/domain/record';
 import { parseRecord, recordFilename, serializeRecord } from '../../src/domain/markdown';
 import { generateIcs } from '../../src/domain/ics';
@@ -50,6 +50,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await sql`UPDATE voluble_accounts SET root_folder_id=${folderId}, drive_state='connected', updated_at=NOW() WHERE google_sub=${session.account.google_sub}`;
       return res.status(200).json({ folder });
     }
+    if (action === 'create-folder') {
+      allow(req, ['POST']);
+      const name = String(req.body?.name ?? '').trim();
+      if (!name || name.length > 100 || /[\u0000-\u001f]/.test(name)) throw Object.assign(new Error('Folder name must be between 1 and 100 printable characters.'), { status: 400 });
+      const folder = await createFile(session.token, {
+        name,
+        parents: ['root'],
+        mimeType: 'application/vnd.google-apps.folder',
+        appProperties: { volubleRoot: 'true' }
+      });
+      await bootstrap(session.token, folder.id);
+      await sql`UPDATE voluble_accounts SET root_folder_id=${folder.id}, drive_state='connected', drive_failure_count=0, updated_at=NOW() WHERE google_sub=${session.account.google_sub}`;
+      return res.status(201).json({ folder });
+    }
     const root = session.account.root_folder_id;
     if (!root) throw Object.assign(new Error('Choose a Drive folder first.'), { status: 409, code: 'folder_required' });
     if (action === 'bootstrap') {
@@ -93,19 +107,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } else {
         file = await createFile(session.token, { name: recordFilename(record), parents: [parent.id], appProperties: { volubleId: record.id } }, serializeRecord(record), 'text/markdown');
       }
-      if (record.event) {
+      const eventFiles = await findEventFiles(session.token, record.id);
+      if (record.category === 'Reminders' && record.event) {
         const icsName = `${recordFilename(record).replace(/\.md$/, '')}.ics`;
-        const siblings = await findChildren(session.token, parent.id, icsName);
-        if (siblings[0]) await updateFile(session.token, siblings[0].id, generateIcs(record), undefined, 'text/calendar; charset=UTF-8');
+        if (eventFiles[0]) await updateFile(session.token, eventFiles[0].id, generateIcs(record), undefined, 'text/calendar; charset=UTF-8');
         else await createFile(session.token, { name: icsName, parents: [parent.id], appProperties: { volubleEventId: record.id } }, generateIcs(record), 'text/calendar');
-      }
+        await Promise.all(eventFiles.slice(1).map((eventFile) => trashFile(session.token, eventFile.id)));
+      } else await Promise.all(eventFiles.map((eventFile) => trashFile(session.token, eventFile.id)));
       return res.status(200).json({ drive: { fileId: file.id, version: file.version } });
     }
     if (action === 'trash') {
       allow(req, ['DELETE']);
       const fileId = String(req.body?.fileId ?? '');
-      await trashFile(session.token, fileId);
-      return res.status(204).end();
+      const recordId = String(req.body?.recordId ?? '');
+      const file = fileId ? await getFile(session.token, fileId).catch((error: unknown) => {
+        if (typeof error === 'object' && error && 'code' in error && error.code === 'drive_not_found') return undefined;
+        throw error;
+      }) : recordId ? await findByUuid(session.token, recordId) : undefined;
+      const eventFiles = recordId ? await findEventFiles(session.token, recordId) : [];
+      await Promise.all([...(file ? [trashFile(session.token, file.id)] : []), ...eventFiles.map((eventFile) => trashFile(session.token, eventFile.id))]);
+      return res.status(200).json({ fileId: file?.id ?? null });
     }
     throw Object.assign(new Error('Unknown Drive action.'), { status: 404 });
   } catch (error) {

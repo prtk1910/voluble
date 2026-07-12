@@ -22,7 +22,7 @@ Voluble is a responsive React PWA with Vercel serverless APIs, Google OAuth and 
 
 ### 1. Sign in and choose a Drive folder
 
-Select **Continue with Google**, approve the requested `drive.file` permission, and choose a folder with Google Picker. Voluble creates its folders inside the location you select and never silently switches to a different folder.
+Select **Continue with Google**, approve the requested `drive.file` permission, and either choose an existing folder with Google Picker or create a new folder in My Drive from Voluble. Voluble creates its category structure inside the selected folder and never silently switches to a different folder.
 
 The resulting structure is:
 
@@ -56,7 +56,7 @@ If OpenAI or Gemini is selected, enter the corresponding provider key in Setting
 
 Select **New capture** or **Capture**, start recording, and speak normally. During cloud transcription, Voluble converts microphone input to small 16 kHz mono WAV chunks in memory, sends them sequentially, and overwrites mutable audio buffers after use.
 
-If on-device recognition is unavailable, Voluble explains why and directs you to choose a cloud provider. If cleanup fails, the original transcript is preserved as a pending record so it can be processed later.
+If on-device recognition is unavailable, Voluble explains why and directs you to choose a cloud provider. If cleanup fails, the original transcript is preserved as a pending record. After correcting the provider or configuration issue, use **Retry processing** on that record to force another cleanup attempt without recording the audio again.
 
 ### 4. Work with the library
 
@@ -134,7 +134,7 @@ e2e/                 Playwright browser tests
 
 ### Prerequisites
 
-- Node.js 22 or 24 and npm.
+- Node.js 24 and npm. The repository includes `.nvmrc` and `package.json#engines` pins so local Vercel workers match the deployed runtime.
 - Vercel CLI for exercising frontend and serverless APIs together.
 - A PostgreSQL database.
 - A Google Cloud project with billing configured where KMS requires it.
@@ -143,6 +143,8 @@ e2e/                 Playwright browser tests
 ### Install
 
 ```bash
+nvm install
+nvm use
 npm install
 cp .env.example .env.local
 ```
@@ -177,7 +179,7 @@ For production, create and version an equivalent managed migration before direct
 | `APP_URL` | Yes | Public origin with no trailing slash. Use `http://localhost:3000` with `vercel dev`. |
 | `GOOGLE_CLIENT_ID` | Yes | OAuth web-client ID. |
 | `GOOGLE_CLIENT_SECRET` | Yes | OAuth web-client secret; server-side only. |
-| `GOOGLE_CLOUD_PROJECT` | Yes | Google Cloud project ID supplied to Picker as its app ID. |
+| `GOOGLE_CLOUD_PROJECT` | Yes | Numeric Google Cloud project number supplied to Picker as its app ID. Despite the variable name, do not use the project ID. |
 | `GOOGLE_PICKER_API_KEY` | Yes | Origin- and API-restricted browser key for Google Picker. It is intentionally returned to the browser. |
 | `GOOGLE_KMS_KEY_NAME` | Yes | Full KMS CryptoKey resource name. |
 | `POSTGRES_URL` | Yes | PostgreSQL connection string used by `@vercel/postgres`. |
@@ -198,10 +200,10 @@ OpenAI and Gemini user API keys are deliberately absent from `.env.example`; ent
 Run the complete application, including Vercel Functions:
 
 ```bash
-npx vercel dev --listen 3000
+npm run dev:full
 ```
 
-The first run may ask you to link or create a Vercel project. Confirm that `APP_URL` and the OAuth callback use the same origin and port.
+This command validates Node 24, loads and checks `.env.local` without printing its secrets, and then starts Vercel on port 3000. Restart it after changing environment variables. The first run may ask you to link or create a Vercel project. Confirm that `APP_URL` and the OAuth callback use the same origin and port.
 
 For frontend-only work:
 
@@ -251,13 +253,17 @@ Live OAuth, Picker, Drive, KMS, provider, revocation, and account-deletion verif
 
 ## Troubleshooting
 
+### `ECONNRESET`, `ERR_IPC_CHANNEL_CLOSED`, or `localStorage` warnings from `vercel dev`
+
+Check `node --version`. Voluble pins Node 24 because Vercel Functions support Node 20, 22, and 24—not Node 26. Run `nvm install`, `nvm use`, and verify that `node --version` reports `v24.x` before restarting `vercel dev`. If another Node installation still takes precedence, place the NVM-selected binary first with `export PATH="$(dirname "$(nvm which 24)"):$PATH"` and run `hash -r`.
+
 ### OAuth callback mismatch
 
 Ensure `APP_URL` exactly matches the browser origin and `${APP_URL}/api/auth/callback` appears in the OAuth client’s authorized redirect URIs. A port difference counts as a different origin.
 
 ### Picker opens but cannot select the intended folder
 
-Confirm that the Picker API is enabled, `GOOGLE_CLOUD_PROJECT` is the project ID rather than its display name, and the Picker key allows the current origin.
+Confirm that the Picker API is enabled, `GOOGLE_CLOUD_PROJECT` is the numeric project number rather than the project ID or display name, and the Picker key allows the current origin.
 
 ### KMS permission or credential errors
 
@@ -274,4 +280,3 @@ Check connectivity and Drive connection state. Bring the app to the foreground o
 ## OpenAI API References
 
 The OpenAI provider implementation follows the official [GPT-5.4 mini model documentation](https://developers.openai.com/api/docs/models/gpt-5.4-mini), [structured outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs), and [GPT-4o mini Transcribe documentation](https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe).
-

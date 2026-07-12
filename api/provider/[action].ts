@@ -64,11 +64,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const provider = String(req.body?.provider) as ProviderName;
       const transcript = String(req.body?.transcript ?? '');
       if (!['openai', 'gemini'].includes(provider) || !transcript || transcript.length > 100_000) throw Object.assign(new Error('Cleanup request is invalid.'), { status: 400 });
+      let timezone = String(req.body?.timezone ?? 'UTC');
+      try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(); } catch { timezone = 'UTC'; }
+      const requestedReference = String(req.body?.referenceTime ?? '');
+      const referenceTime = Number.isFinite(Date.parse(requestedReference)) ? new Date(requestedReference).toISOString() : new Date().toISOString();
       const result = await withDecryptedEnvelope(envelope, async (plaintext) => {
         const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
         const key = keys[provider];
         if (!key) throw Object.assign(new Error(`Configure ${provider} first.`), { status: 409 });
-        return cleanup(provider, key, transcript, String(req.body?.language ?? 'en-US'));
+        return cleanup(provider, key, transcript, String(req.body?.language ?? 'en-US'), timezone, referenceTime);
       });
       return res.status(200).json({ result, model: models[provider].cleanup });
     }

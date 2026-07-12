@@ -1,5 +1,5 @@
 import { withRetry } from '../sync/backoff';
-import { enqueue } from '../sync/outbox';
+import { enqueue, removeOperation, stageDeletion, updateDeletionFileId } from '../sync/outbox';
 import type { VolubleRecord } from '../domain/record';
 
 export class ApiError extends Error {
@@ -29,6 +29,7 @@ export const api = {
   deleteAccount: () => request<{ driveContentPreserved: true }>('/api/auth/delete', { method: 'DELETE' }),
   records: (cursor?: string) => request<{ records: VolubleRecord[]; removed: string[]; cursor: string; incremental: boolean }>(`/api/drive/records${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
   selectFolder: (folderId: string) => request('/api/drive/select-folder', { method: 'POST', body: JSON.stringify({ folderId }) }),
+  createFolder: (name: string) => serialize(() => request<{ folder: { id: string; name: string } }>('/api/drive/create-folder', { method: 'POST', body: JSON.stringify({ name }) })),
   pickerToken: () => request<{ accessToken: string; apiKey: string; appId?: string }>('/api/drive/picker-token'),
   save: (record: VolubleRecord) => serialize(async () => {
     try {
@@ -43,12 +44,27 @@ export const api = {
       throw error;
     }
   }),
-  trash: (record: VolubleRecord) => serialize(async () => {
-    if (!record.drive?.fileId) return;
-    try { await request('/api/drive/trash', { method: 'DELETE', body: JSON.stringify({ fileId: record.drive.fileId }) }); }
-    catch (error) { await enqueue(record, 'trash'); throw error; }
-  }),
+  trash: async (record: VolubleRecord) => {
+    // Stage immediately for reload safety, then again inside the mutation stream
+    // to cancel an upsert that may have failed while this deletion was waiting.
+    await stageDeletion(record);
+    return serialize(async () => {
+      await stageDeletion(record);
+      try {
+        const result = await request<{ fileId: string | null }>('/api/drive/trash', { method: 'DELETE', body: JSON.stringify({ fileId: record.drive?.fileId, recordId: record.id }) });
+        if (result.fileId) await updateDeletionFileId(record.id, result.fileId);
+        await removeOperation(`${record.id}:trash`);
+      } catch (error) { throw error; }
+    });
+  },
   configureProviders: (keys: { openai?: string; gemini?: string }) => request('/api/provider/configure', { method: 'PUT', body: JSON.stringify({ keys }) }),
   transcribe: (provider: 'openai' | 'gemini', audio: string, language: string) => request<{ text: string; model: string }>('/api/provider/transcribe', { method: 'POST', body: JSON.stringify({ provider, audio, language }) }),
-  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string) => request<{ result: Omit<VolubleRecord, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion' | 'language' | 'status' | 'provenance' | 'originalTranscript' | 'drive'>; model: string }>('/api/provider/cleanup', { method: 'POST', body: JSON.stringify({ provider, transcript, language }) })
+  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string) => request<{ result: Omit<VolubleRecord, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion' | 'language' | 'status' | 'provenance' | 'originalTranscript' | 'drive'>; model: string }>('/api/provider/cleanup', {
+    method: 'POST',
+    body: JSON.stringify({
+      provider, transcript, language,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      referenceTime: new Date().toISOString()
+    })
+  })
 };
