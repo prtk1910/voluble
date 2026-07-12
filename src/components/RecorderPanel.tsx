@@ -25,6 +25,7 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
   const fallbackStarting = useRef<Promise<void> | undefined>(undefined);
   const stopping = useRef(false);
   const interimRef = useRef('');
+  const recordingId = useRef(crypto.randomUUID());
   useEffect(() => { if (state !== 'recording') return; const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000); return () => clearInterval(timer); }, [state]);
 
   const append = (text: string) => { setTranscript((current) => `${current}${current ? ' ' : ''}${text.trim()}`); setInterim(''); interimRef.current = ''; };
@@ -78,9 +79,9 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
     setState('processing');
     try {
       if (cleanupProvider === 'none') {
-        onRecords([createRecord({ title: transcript.trim().slice(0, 70), content: transcript, originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: 'none' } })]);
+        onRecords([createRecord({ id: recordingId.current, title: transcript.trim().slice(0, 70), content: transcript, originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: 'none' } })]);
       } else {
-        const { result, model, provider: actualProvider, freeTasksRemaining } = await api.cleanup(cleanupProvider, transcript, language, timezone);
+        const { result, model, provider: actualProvider, freeTasksRemaining } = await api.cleanup(cleanupProvider, transcript, language, timezone, recordingId.current);
         onFreeTasksRemaining?.(freeTasksRemaining);
         if (result.splitSuggestions.length > 1) { setSplitDecision({ result, model, provider: actualProvider }); setState('ready'); return; }
         onRecords([recordFromCandidate(result, model, actualProvider)]);
@@ -88,7 +89,8 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
       onClose();
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'free_limit_reached') onFreeTasksRemaining?.(0);
-      onRecords([createRecord({ title: transcript.slice(0, 70), content: '', originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: cleanupProvider } })]);
+      else if (cause instanceof ApiError && cause.code === 'free_credit_deducted') void api.providerStatus().then((status) => onFreeTasksRemaining?.(status.freeTasksRemaining)).catch(() => undefined);
+      onRecords([createRecord({ id: recordingId.current, title: transcript.slice(0, 70), content: '', originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: cleanupProvider } })]);
       setState('error'); setError(`${cause instanceof Error ? cause.message : 'Processing failed.'} The transcript was preserved as a pending record.`);
     }
   };

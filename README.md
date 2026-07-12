@@ -68,7 +68,9 @@ Open **Settings** and choose providers independently:
 - **Cleanup and categorization:** none, OpenAI, or Gemini.
 - **Language:** the language used by local recognition and cloud transcription.
 
-Immediately after the first sign-in, the folder-selection banner explains that the user's first 10 notes are free and that a personal key is required afterward. Once the Drive folder is connected, the onboarding banner shows the remaining free notes and directs users to Settings. A successful cleanup/categorization call consumes one free note; a multi-record split from the same capture still consumes only one. Failed provider calls are refunded.
+Immediately after the first sign-in, the folder-selection banner explains that the user's first 10 notes are free and that a personal key is required afterward. Once the Drive folder is connected, the onboarding banner shows the remaining free notes and directs users to Settings. A successful cleanup/categorization call consumes one free note; a multi-record split from the same capture still consumes only one.
+
+If processing fails, the initial attempt and up to three retries for that recording are not charged. A later failed retry keeps the reserved credit. Refunded failures are also capped across the account so changing recording IDs cannot create unlimited provider calls.
 
 For unlimited use, enter an OpenAI or Gemini key in Settings. User-owned keys are not server environment variables: Voluble envelope-encrypts them and writes only the encrypted envelope to the selected Drive folder. Once a personal key is saved, that provider is used without consuming the hosted allowance.
 
@@ -105,14 +107,15 @@ If Drive and the local copy changed concurrently, Voluble compares their `update
 - **Sign out** removes the current session and local browser data but keeps the encrypted Google refresh token for a future login.
 - Select the profile name at the bottom of the sidebar to open the account menu and sign out.
 - **Disconnect Drive** revokes Google access, removes stored authentication metadata, and clears local data. Drive files remain untouched.
-- **Delete Voluble account** removes backend account state, sessions, encrypted tokens, folder pointers, cookies, and local caches. The selected Drive folder remains owned by the user and must be deleted manually if it is no longer wanted.
+- **Delete Voluble account** removes identifiable backend account state, sessions, encrypted tokens, folder pointers, cookies, and local caches. A pseudonymous HMAC trial claim and its usage totals remain for abuse prevention. The selected Drive folder remains owned by the user and must be deleted manually if it is no longer wanted.
 
 ## Privacy and Security Model
 
-- Google Drive is authoritative for user content. PostgreSQL stores only minimal account/session metadata, the encrypted refresh token envelope, Drive connection state, and the selected folder pointer.
+- Google Drive is authoritative for user content. PostgreSQL stores minimal account/session metadata, the encrypted refresh token envelope, Drive connection state, the selected folder pointer, and the pseudonymous trial-abuse ledger.
 - Google refresh tokens and provider credentials use AES-256-GCM envelope encryption. Google Cloud KMS wraps each data-encryption key.
 - Provider credentials are fetched, unwrapped, and decrypted for one provider invocation only. Mutable plaintext buffers are overwritten in `finally` blocks and are not stored in module globals or cross-request caches.
 - Hosted free-allowance credentials remain server-only Vercel environment variables and are never returned to the browser or written to a user's Drive.
+- Free-trial eligibility is keyed by an HMAC of the stable Google account subject, not by email. The pseudonymous claim survives account deletion solely to prevent repeated trial signup.
 - Application code does not log request bodies, authorization headers, audio, transcripts, provider keys, or KMS plaintext.
 - Audio is not written to Drive, IndexedDB, Cache Storage, backend disk, or provider file-upload storage.
 - OpenAI cleanup uses the pinned `gpt-5.4-mini-2026-03-17` snapshot with Responses API storage disabled. OpenAI transcription prefers `gpt-4o-transcribe-diarize` for speaker blocks and falls back to `gpt-4o-mini-transcribe` when diarization is unavailable.
@@ -193,8 +196,23 @@ Set `POSTGRES_URL` to a PostgreSQL connection string. The application currently 
 
 - `voluble_accounts`
 - `voluble_sessions`
+- `voluble_trial_claims` — pseudonymous signup and cumulative allowance usage
+- `voluble_trial_attempts` — per-recording failed-attempt counters
 
 For production, create and version an equivalent managed migration before directing user traffic rather than relying solely on runtime schema creation.
+
+To review trial signups without exposing email addresses, query the pseudonymous ledger:
+
+```sql
+SELECT LEFT(identity_hash, 12) AS trial_id,
+       first_claimed_at,
+       free_tasks_used,
+       refunded_failures_used
+FROM voluble_trial_claims
+ORDER BY first_claimed_at DESC;
+```
+
+Current identifiable accounts remain available separately in `voluble_accounts`; deleting an account removes it from that table but does not create a new trial claim on the next signup.
 
 ### Environment variables
 
@@ -213,6 +231,7 @@ For production, create and version an equivalent managed migration before direct
 | `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | On Vercel | OIDC provider ID, commonly `vercel`. |
 | `POSTGRES_URL` | Yes | PostgreSQL connection string used by `@vercel/postgres`. |
 | `SESSION_SECRET` | Yes | High-entropy secret used to authenticate short-lived OAuth state tokens. |
+| `TRIAL_LEDGER_SECRET` | For free tier | Stable high-entropy HMAC secret for pseudonymous trial identities. Do not rotate it without migrating stored hashes. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Conditional | Local path to a Google service-account JSON file. Omit when Application Default Credentials are already available. |
 | `OPENAI_CLEANUP_MODEL` | No | Overrides the pinned OpenAI cleanup snapshot. Leave unset for reproducible default behavior. |
 | `OPENAI_FREE_TIER_API_KEY` | Conditional | Server-only OpenAI key used for the 10-note hosted allowance. Preferred when both hosted keys are set. |
@@ -224,7 +243,9 @@ Generate a session secret with:
 openssl rand -base64 48
 ```
 
-Set at least one hosted provider key to enable the 10-note keyless allowance. These deployment-owned keys are distinct from user API keys entered through Settings. If neither hosted key is set, users must add their own key before processing a capture.
+Generate `TRIAL_LEDGER_SECRET` separately with the same command; do not reuse `SESSION_SECRET`.
+
+Set `TRIAL_LEDGER_SECRET` and at least one hosted provider key to enable the 10-note keyless allowance. These deployment-owned keys are distinct from user API keys entered through Settings. If the ledger secret or both hosted keys are absent, users must add their own key before processing a capture.
 
 ### Run locally
 
@@ -264,7 +285,7 @@ Live OAuth, Picker, Drive, KMS, provider, revocation, and account-deletion verif
 
 1. Import the repository into Vercel and attach a PostgreSQL integration that exposes `POSTGRES_URL`.
 2. Add every required variable from `.env.example` for Preview and Production as appropriate.
-3. To enable the free allowance, add `OPENAI_FREE_TIER_API_KEY` or `GEMINI_FREE_TIER_API_KEY` as a server-only Vercel secret. If both are present, Voluble uses OpenAI.
+3. To enable the free allowance, add `TRIAL_LEDGER_SECRET` plus `OPENAI_FREE_TIER_API_KEY` or `GEMINI_FREE_TIER_API_KEY` as server-only Vercel secrets. If both provider keys are present, Voluble uses OpenAI.
 4. Provide Google Application Default Credentials to the Vercel runtime, preferably through workload identity federation or another short-lived identity mechanism. Avoid committing service-account JSON.
 5. Set `APP_URL` to the final HTTPS origin.
 6. Add `${APP_URL}/api/auth/callback` to the Google OAuth client and add the origin to the Picker key restrictions.

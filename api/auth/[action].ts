@@ -4,7 +4,7 @@ import { SignJWT, jwtVerify } from 'jose';
 import { sql } from '@vercel/postgres';
 import { authorizationUrl, exchangeCode, revoke, verifyGoogleIdToken } from '../../server/google.js';
 import { config } from '../../server/config.js';
-import { createSession, hashSession, upsertAccount } from '../../server/db.js';
+import { clearFreeTaskFailures, createSession, hashSession, upsertAccount } from '../../server/db.js';
 import { clearSession, requireSession, setSession } from '../../server/session.js';
 import { encryptEnvelope } from '../../server/security.js';
 import { allow, fail } from '../../server/http.js';
@@ -61,6 +61,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       allow(req, ['DELETE']);
       const { account } = await requireSession(req);
       if (account.refresh_token_envelope) await revoke(account.refresh_token_envelope).catch(() => undefined);
+      await clearFreeTaskFailures(account.google_sub);
       await sql`DELETE FROM voluble_accounts WHERE google_sub=${account.google_sub}`;
       clearSession(res);
       return res.status(200).json({ driveContentPreserved: true });

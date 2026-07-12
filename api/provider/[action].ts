@@ -5,7 +5,9 @@ import { createFile, fileContent, findChildren, updateFile } from '../../server/
 import { allow, fail } from '../../server/http.js';
 import { encryptEnvelope, withDecryptedEnvelope } from '../../server/security.js';
 import { cleanup, models, sharedProviderCredential, transcribe, type ProviderKeys, type ProviderName } from '../../server/provider.js';
-import { FREE_TASK_LIMIT, freeTasksRemaining, refundFreeTask, reserveFreeTask, type AccountRow } from '../../server/db.js';
+import { clearFreeTaskFailures, FREE_RETRIES_PER_RECORDING, FREE_TASK_LIMIT, freeTasksRemaining, recordFreeTaskFailure, reserveFreeTask, trialLedgerConfigured, type AccountRow } from '../../server/db.js';
+
+const hostedProviderCredential = () => trialLedgerConfigured() ? sharedProviderCredential() : undefined;
 
 async function context(req: VercelRequest) {
   const { account } = await requireSession(req);
@@ -34,13 +36,13 @@ async function withProviderKey<T>(token: string, hiddenId: string, account: Acco
       const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
       if (keys[requested]) return work(requested, keys[requested], false);
       if (Object.values(keys).some(Boolean)) throw Object.assign(new Error(`Configure ${requested} first or select a provider whose key you have saved.`), { status: 409, code: 'credentials_required' });
-      const shared = sharedProviderCredential();
+      const shared = hostedProviderCredential();
       if (!shared) throw Object.assign(new Error('Add an OpenAI or Gemini API key in Settings to continue.'), { status: 409, code: 'credentials_required' });
       if (freeTasksRemaining(account) <= 0) throw Object.assign(new Error('Your 10 free notes have been used. Add your own API key in Settings to continue.'), { status: 402, code: 'free_limit_reached' });
       return work(shared.provider, shared.key, true);
     });
   }
-  const shared = sharedProviderCredential();
+  const shared = hostedProviderCredential();
   if (!shared) throw Object.assign(new Error('Add an OpenAI or Gemini API key in Settings to continue.'), { status: 409, code: 'credentials_required' });
   if (freeTasksRemaining(account) <= 0) throw Object.assign(new Error('Your 10 free notes have been used. Add your own API key in Settings to continue.'), { status: 402, code: 'free_limit_reached' });
   return work(shared.provider, shared.key, true);
@@ -70,7 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'status') {
       allow(req, ['GET']);
       const providers = await configuredProviders(token, hidden.id);
-      const shared = sharedProviderCredential();
+      const shared = hostedProviderCredential();
       return res.status(200).json({ providers, freeTierAvailable: Boolean(shared), freeTierProvider: shared?.provider ?? null, freeTaskLimit: FREE_TASK_LIMIT, freeTasksRemaining: freeTasksRemaining(account) });
     }
     if (action === 'transcribe') {
@@ -88,7 +90,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       allow(req, ['POST']);
       const provider = String(req.body?.provider) as ProviderName;
       const transcript = String(req.body?.transcript ?? '');
-      if (!['openai', 'gemini'].includes(provider) || !transcript || transcript.length > 100_000) throw Object.assign(new Error('Cleanup request is invalid.'), { status: 400 });
+      const recordingId = String(req.body?.recordingId ?? '');
+      if (!['openai', 'gemini'].includes(provider) || !transcript || transcript.length > 100_000 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(recordingId)) throw Object.assign(new Error('Cleanup request is invalid.'), { status: 400 });
       let timezone = String(req.body?.timezone ?? 'UTC');
       try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(); } catch { timezone = 'UTC'; }
       const requestedReference = String(req.body?.referenceTime ?? '');
@@ -96,13 +99,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const response = await withProviderKey(token, hidden.id, account, provider, async (actualProvider, key, shared) => {
         let remaining = freeTasksRemaining(account);
         if (shared) remaining = await reserveFreeTask(account.google_sub);
+        let result;
         try {
-          const result = await cleanup(actualProvider, key, transcript, String(req.body?.language ?? 'en-US'), timezone, referenceTime);
-          return { result, model: models[actualProvider].cleanup, provider: actualProvider, freeTasksRemaining: remaining };
+          result = await cleanup(actualProvider, key, transcript, String(req.body?.language ?? 'en-US'), timezone, referenceTime);
         } catch (error) {
-          if (shared) await refundFreeTask(account.google_sub).catch(() => undefined);
+          if (shared) {
+            const failure = await recordFreeTaskFailure(account.google_sub, recordingId);
+            const remainingRetries = Math.max(0, FREE_RETRIES_PER_RECORDING - Math.max(0, failure.failedAttempts - 1));
+            const suffix = failure.refunded
+              ? ` This attempt was not charged. ${remainingRetries ? `${remainingRetries} free ${remainingRetries === 1 ? 'retry' : 'retries'} remain for this recording.` : 'Your three free retries for this recording are now used.'}`
+              : ' A free-note credit was deducted because this recording already used its three retries.';
+            if (error instanceof Error) {
+              error.message += suffix;
+              if (!failure.refunded) (error as Error & { code?: string }).code = 'free_credit_deducted';
+            }
+          }
           throw error;
         }
+        if (shared) await clearFreeTaskFailures(account.google_sub, recordingId).catch(() => undefined);
+        return { result, model: models[actualProvider].cleanup, provider: actualProvider, freeTasksRemaining: remaining };
       });
       return res.status(200).json(response);
     }

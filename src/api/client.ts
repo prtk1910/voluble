@@ -62,12 +62,13 @@ export const api = {
   configureProviders: (keys: { openai?: string; gemini?: string }) => request('/api/provider/configure', { method: 'PUT', body: JSON.stringify({ keys }) }),
   providerStatus: () => request<ProviderStatus>('/api/provider/status'),
   transcribe: (provider: 'openai' | 'gemini', audio: string, language: string) => request<{ text: string; model: string; provider: 'openai' | 'gemini' }>('/api/provider/transcribe', { method: 'POST', body: JSON.stringify({ provider, audio, language }) }),
-  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string, timezone: string) => request<{ result: CleanedResponse; model: string; provider: 'openai' | 'gemini'; freeTasksRemaining: number }>('/api/provider/cleanup', {
+  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string, timezone: string, recordingId: string) => request<{ result: CleanedResponse; model: string; provider: 'openai' | 'gemini'; freeTasksRemaining: number }>('/api/provider/cleanup', {
     method: 'POST',
     body: JSON.stringify({
       provider, transcript, language,
       timezone,
-      referenceTime: new Date().toISOString()
+      referenceTime: new Date().toISOString(),
+      recordingId
     })
   })
 };
