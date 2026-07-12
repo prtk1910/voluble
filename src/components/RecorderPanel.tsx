@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CircleStop, Mic, Sparkles, X } from 'lucide-react';
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import { createRecord, type VolubleRecord } from '../domain/record';
 import { localRecognition, PcmRecorder } from '../recording/recorder';
 import { toBase64 } from '../recording/pcm';
@@ -8,15 +8,15 @@ import { toBase64 } from '../recording/pcm';
 type CloudProvider = 'openai' | 'gemini';
 type CleanupResult = Awaited<ReturnType<typeof api.cleanup>>['result'];
 type CleanupCandidate = Omit<CleanupResult, 'splitSuggestions'>;
-type Props = { provider: 'local' | CloudProvider; fallbackProvider: CloudProvider; cleanupProvider: 'none' | CloudProvider; language: string; timezone: string; onRecords(records: VolubleRecord[]): void; onClose(): void };
+type Props = { provider: 'local' | CloudProvider; fallbackProvider: CloudProvider; cleanupProvider: 'none' | CloudProvider; language: string; timezone: string; onRecords(records: VolubleRecord[]): void; onFreeTasksRemaining?(remaining: number): void; onClose(): void };
 
-export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, language, timezone, onRecords, onClose }: Props) {
+export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, language, timezone, onRecords, onFreeTasksRemaining, onClose }: Props) {
   const [state, setState] = useState<'ready' | 'preparing' | 'recording' | 'processing' | 'error'>('ready');
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
   const [error, setError] = useState('');
   const [seconds, setSeconds] = useState(0);
-  const [splitDecision, setSplitDecision] = useState<{ result: CleanupResult; model: string }>();
+  const [splitDecision, setSplitDecision] = useState<{ result: CleanupResult; model: string; provider: CloudProvider }>();
   const recorder = useRef<PcmRecorder | undefined>(undefined);
   const recognition = useRef<Awaited<ReturnType<typeof localRecognition>>>(undefined);
   const queue = useRef(Promise.resolve());
@@ -36,7 +36,7 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
       activeProvider.current = cloudProvider;
       recorder.current = new PcmRecorder(async (wav) => {
         const encoded = toBase64(wav);
-        queue.current = queue.current.then(async () => { const result = await api.transcribe(cloudProvider, encoded, language); transcriptionModel.current = result.model; append(result.text); });
+        queue.current = queue.current.then(async () => { const result = await api.transcribe(cloudProvider, encoded, language); activeProvider.current = result.provider; transcriptionModel.current = result.model; append(result.text); });
         await queue.current;
       }, () => setError('The two-hour recording limit was reached.'));
       await recorder.current.start();
@@ -80,18 +80,20 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
       if (cleanupProvider === 'none') {
         onRecords([createRecord({ title: transcript.trim().slice(0, 70), content: transcript, originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: 'none' } })]);
       } else {
-        const { result, model } = await api.cleanup(cleanupProvider, transcript, language, timezone);
-        if (result.splitSuggestions.length > 1) { setSplitDecision({ result, model }); setState('ready'); return; }
-        onRecords([recordFromCandidate(result, model)]);
+        const { result, model, provider: actualProvider, freeTasksRemaining } = await api.cleanup(cleanupProvider, transcript, language, timezone);
+        onFreeTasksRemaining?.(freeTasksRemaining);
+        if (result.splitSuggestions.length > 1) { setSplitDecision({ result, model, provider: actualProvider }); setState('ready'); return; }
+        onRecords([recordFromCandidate(result, model, actualProvider)]);
       }
       onClose();
     } catch (cause) {
+      if (cause instanceof ApiError && cause.code === 'free_limit_reached') onFreeTasksRemaining?.(0);
       onRecords([createRecord({ title: transcript.slice(0, 70), content: '', originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: cleanupProvider } })]);
       setState('error'); setError(`${cause instanceof Error ? cause.message : 'Processing failed.'} The transcript was preserved as a pending record.`);
     }
   };
-  const recordFromCandidate = (candidate: CleanupCandidate, model: string) => createRecord({ ...candidate, tasks: candidate.tasks.map((task) => ({ ...task, id: crypto.randomUUID() })), originalTranscript: transcript, provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: cleanupProvider, cleanupModel: model } });
-  const chooseSplit = (candidates: CleanupCandidate[]) => { if (!splitDecision) return; onRecords(candidates.map((candidate) => recordFromCandidate(candidate, splitDecision.model))); onClose(); };
+  const recordFromCandidate = (candidate: CleanupCandidate, model: string, actualProvider: CloudProvider) => createRecord({ ...candidate, tasks: candidate.tasks.map((task) => ({ ...task, id: crypto.randomUUID() })), originalTranscript: transcript, provenance: { transcription: activeProvider.current, transcriptionModel: transcriptionModel.current, cleanup: actualProvider, cleanupModel: model } });
+  const chooseSplit = (candidates: CleanupCandidate[]) => { if (!splitDecision) return; onRecords(candidates.map((candidate) => recordFromCandidate(candidate, splitDecision.model, splitDecision.provider))); onClose(); };
   return <div className="modal-backdrop"><section className="recorder-panel" role="dialog" aria-modal="true" aria-label="Record a thought">
     <header><div><span className="eyebrow">New capture</span><h2>Speak naturally</h2></div><button className="icon-button" onClick={onClose}><X /></button></header>
     <div className={`orb ${state === 'recording' ? 'active' : ''}`}><Mic /><span>{state === 'recording' ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : state === 'preparing' ? 'Preparing…' : state === 'processing' ? 'Working…' : 'Ready'}</span></div>

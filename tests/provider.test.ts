@@ -1,7 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, transcribe } from '../server/provider';
+import { cleanup, sharedProviderCredential, transcribe } from '../server/provider';
 
 afterEach(() => vi.restoreAllMocks());
+
+it('prefers the hosted OpenAI key and falls back to Gemini', () => {
+  expect(sharedProviderCredential({ OPENAI_FREE_TIER_API_KEY: ' openai-key ', GEMINI_FREE_TIER_API_KEY: 'gemini-key' })).toEqual({ provider: 'openai', key: 'openai-key' });
+  expect(sharedProviderCredential({ GEMINI_FREE_TIER_API_KEY: ' gemini-key ' })).toEqual({ provider: 'gemini', key: 'gemini-key' });
+  expect(sharedProviderCredential({})).toBeUndefined();
+});
 
 it('sends an OpenAI-compatible strict cleanup schema and normalizes a null event', async () => {
   const providerOutput = {

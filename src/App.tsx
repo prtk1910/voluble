@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, CalendarClock, CheckSquare2, ChevronDown, CircleAlert, FileText, FolderPlus, KeyRound, ListChecks, LogOut, Menu, Mic, NotebookPen, Plus, Search, Settings as SettingsIcon, ShoppingBasket, Sparkles, X } from 'lucide-react';
-import { ApiError, api } from './api/client';
+import { ApiError, api, type ProviderStatus } from './api/client';
 import { categories, createRecord, recordSchema, type Category, type VolubleRecord } from './domain/record';
 import { repairTranscript } from './domain/markdown';
 import { filterRecords } from './search/index';
@@ -19,6 +19,7 @@ type Session = Awaited<ReturnType<typeof api.session>>;
 type View = 'All' | Category | 'Settings';
 const iconFor: Record<Category, typeof FileText> = { Tasks: CheckSquare2, Reminders: CalendarClock, Notes: NotebookPen, 'Meeting Minutes': ListChecks, 'Shopping Lists': ShoppingBasket, Other: Archive };
 const initialPreferences: Preferences = { transcription: 'local', transcriptionFallback: 'openai', cleanup: 'openai', language: 'en-US', timezone: browserTimeZone() };
+const unavailableProviderStatus: ProviderStatus = { providers: [], freeTierAvailable: false, freeTierProvider: null, freeTaskLimit: 10, freeTasksRemaining: 0 };
 
 function download(name: string, value: string, type: string) {
   const url = URL.createObjectURL(new Blob([value], { type }));
@@ -39,7 +40,7 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [processingRecords, setProcessingRecords] = useState<Set<string>>(() => new Set());
-  const [providerConfigured, setProviderConfigured] = useState(false);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus>(unavailableProviderStatus);
   const [profileOpen, setProfileOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const authError = new URLSearchParams(window.location.search).has('auth_error');
@@ -63,9 +64,9 @@ export default function App() {
         const merged = mergeNewest(local, visibleRemote, remote.incremental ? remote.removed : []);
         setRecords(merged); await cacheRecords(merged); await writeState('drive-cursor', remote.cursor); setSync('idle');
         await confirmDeletions(remote.removed, remote.records, remote.incremental);
-        const providerStatus = await api.providerStatus().catch(() => ({ providers: [] as Array<'openai' | 'gemini'> }));
-        setProviderConfigured(providerStatus.providers.length > 0);
-        if (!providerStatus.providers.length) setView('Settings');
+        const status = await api.providerStatus().catch(() => unavailableProviderStatus);
+        setProviderStatus(status);
+        if (!status.providers.length && (!status.freeTierAvailable || status.freeTasksRemaining <= 0)) setView('Settings');
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 401 && !authenticated) setSession(undefined);
@@ -124,13 +125,13 @@ export default function App() {
   const trash = async (record: VolubleRecord) => { setRecords((current) => current.filter((item) => item.id !== record.id)); setEditing(undefined); try { await api.trash(record); } catch { setSync('pending'); } };
   const startCapture = () => {
     if (!session?.drive.folderId) { setMessage('Choose your Drive folder before starting a capture.'); return; }
-    if (!providerConfigured) { setView('Settings'); setMessage('Add an OpenAI or Gemini API key before starting a capture.'); return; }
+    if (!providerStatus.providers.length && (!providerStatus.freeTierAvailable || providerStatus.freeTasksRemaining <= 0)) { setView('Settings'); setMessage(providerStatus.freeTierAvailable ? 'Your 10 free notes have been used. Add an OpenAI or Gemini API key to continue.' : 'Add an OpenAI or Gemini API key before starting a capture.'); return; }
     setRecording(true);
   };
   const profileLogout = async () => { await api.logout(); indexedDB.deleteDatabase('voluble'); if ('caches' in window) await Promise.all((await caches.keys()).map((name) => caches.delete(name))); setSession(undefined); };
   const refreshSelectedFolder = async () => { await resetDriveCache(); setRecords([]); await load(); };
-  const chooseFolder = async () => { try { const id = await chooseDriveFolder(); if (id) { await api.selectFolder(id); await refreshSelectedFolder(); setView('Settings'); setMessage('Drive folder connected. Now add an OpenAI or Gemini API key.'); } } catch (error) { setMessage(error instanceof Error ? error.message : 'Folder selection failed.'); } };
-  const createFolder = async (name: string) => { await api.createFolder(name); setNewFolderOpen(false); await refreshSelectedFolder(); setView('Settings'); setMessage(`Created and connected “${name}”. Now add a provider API key.`); };
+  const chooseFolder = async () => { try { const id = await chooseDriveFolder(); if (id) { await api.selectFolder(id); await refreshSelectedFolder(); setView('Settings'); setMessage('Drive folder connected. You can use the free allowance or add your own provider key.'); } } catch (error) { setMessage(error instanceof Error ? error.message : 'Folder selection failed.'); } };
+  const createFolder = async (name: string) => { await api.createFolder(name); setNewFolderOpen(false); await refreshSelectedFolder(); setView('Settings'); setMessage(`Created and connected “${name}”. You can use the free allowance or add your own provider key.`); };
   const retryProcessing = async (record: VolubleRecord) => {
     const repaired = repairTranscript(record);
     const transcript = repaired.originalTranscript.trim();
@@ -138,7 +139,8 @@ export default function App() {
     if (preferences.cleanup === 'none') { setMessage('Choose OpenAI or Gemini for cleanup and categorization in Settings, then retry.'); return; }
     setProcessingRecords((current) => new Set(current).add(record.id));
     try {
-      const { result, model } = await api.cleanup(preferences.cleanup, transcript, record.language, preferences.timezone);
+      const { result, model, provider, freeTasksRemaining } = await api.cleanup(preferences.cleanup, transcript, record.language, preferences.timezone);
+      setProviderStatus((current) => ({ ...current, freeTasksRemaining }));
       const processed = recordSchema.parse({
         ...repaired,
         ...result,
@@ -146,11 +148,12 @@ export default function App() {
         status: 'active',
         originalTranscript: transcript,
         updatedAt: new Date().toISOString(),
-        provenance: { ...record.provenance, cleanup: preferences.cleanup, cleanupModel: model }
+        provenance: { ...record.provenance, cleanup: provider, cleanupModel: model }
       });
       await save(processed);
       setMessage(`Processed “${processed.title}”.`);
     } catch (error) {
+      if (error instanceof ApiError && error.code === 'free_limit_reached') setProviderStatus((current) => ({ ...current, freeTasksRemaining: 0 }));
       setMessage(`${error instanceof Error ? error.message : 'Processing failed.'} The transcript remains pending.`);
     } finally {
       setProcessingRecords((current) => { const next = new Set(current); next.delete(record.id); return next; });
@@ -159,15 +162,19 @@ export default function App() {
   if (!authChecked) return <div className="splash"><div className="brand-mark"><span /><span /><span /><span /><span /></div><p>Opening Voluble…</p></div>;
   if (!session) return <main className="landing"><nav><Brand /></nav><div className="hero"><span className="eyebrow">Your words, made useful</span><h1>Speak it now.<br /><em>Find it later.</em></h1><p>Voluble turns a wandering thought into a useful task, note, reminder, or list—stored as readable files in your Google Drive.</p>{authError && <div className="notice error auth-error">Google sign-in could not be completed. Check your connection and try again.</div>}<a className="hero-cta" href="/api/auth/login"><Sparkles /> Start with Google</a><div className="trust"><span><ShieldIcon /> Your Drive stays yours</span><span><Mic size={17} /> Audio is never stored</span></div></div><div className="hero-card"><div className="waveform">{Array.from({ length: 42 }, (_, index) => <i key={index} style={{ height: `${12 + ((index * 17) % 46)}px` }} />)}</div><blockquote>“Remind me to send Maya the revised proposal next Tuesday afternoon.”</blockquote><div className="result-chip"><CalendarClock /><div><strong>Send Maya the revised proposal</strong><span>Tuesday · 3:00 PM · Reminder</span></div></div></div></main>;
 
+  const hostedProvider = !providerStatus.providers.length ? providerStatus.freeTierProvider : null;
+  const recorderProvider = preferences.transcription === 'local' ? 'local' : hostedProvider ?? preferences.transcription;
+  const recorderFallback = hostedProvider ?? preferences.transcriptionFallback;
+  const recorderCleanup = preferences.cleanup === 'none' ? 'none' : hostedProvider ?? preferences.cleanup;
   const nav = <aside className={mobileNav ? 'sidebar open' : 'sidebar'}><div className="sidebar-top"><Brand /><button className="icon-button nav-close" onClick={() => setMobileNav(false)}><X /></button></div><button className="new-capture" onClick={() => { startCapture(); setMobileNav(false); }}><Plus /> New capture</button><nav className="side-nav"><button className={view === 'All' ? 'selected' : ''} onClick={() => setView('All')}><FileText /> All records <span>{records.length}</span></button>{categories.map((category) => { const Icon = iconFor[category]; return <button key={category} className={view === category ? 'selected' : ''} onClick={() => { setView(category); setMobileNav(false); }}><Icon /> {category}<span>{records.filter((record) => record.category === category).length}</span></button>; })}<hr /><button className={view === 'Settings' ? 'selected' : ''} onClick={() => setView('Settings')}><SettingsIcon /> Settings</button></nav><div className="profile-control"><button className="user-card" onClick={() => setProfileOpen((open) => !open)}><div>{session.user.email.slice(0, 1).toUpperCase()}</div><span><strong>{session.user.email.split('@')[0]}</strong><small>{sync === 'idle' ? 'Synced with Drive' : sync === 'syncing' ? 'Syncing…' : sync === 'offline' ? 'Offline' : sync === 'disconnected' ? 'Drive disconnected' : 'Pending sync'}</small></span></button>{profileOpen && <div className="profile-menu"><span>{session.user.email}</span><button onClick={() => void profileLogout()}><LogOut size={15} /> Log out</button></div>}</div></aside>;
   return <div className="app-shell">{nav}<main className="content"><header className="mobile-header"><button className="icon-button" onClick={() => setMobileNav(true)}><Menu /></button><Brand /><button className="icon-button" onClick={startCapture}><Mic /></button></header>{message && <div className={`banner ${sync === 'disconnected' ? 'error' : ''}`}><CircleAlert /> {message}{sync === 'disconnected' && <a className="button-link" href="/api/auth/login">Reconnect</a>}<button onClick={() => setMessage('')}><X /></button></div>}
-    {session.drive.folderId && !providerConfigured && <div className="onboarding"><KeyRound /><div><strong>Add your provider API key</strong><p>Your Drive folder is ready. Add an OpenAI or Gemini API key in Settings before starting your first capture.</p></div><div className="folder-actions"><button className="primary" onClick={() => { setView('Settings'); setMobileNav(false); }}>Open Settings</button></div></div>}
-    {view === 'Settings' ? <Settings preferences={preferences} onPreferences={setPreferences} folderId={session.drive.folderId} onChooseFolder={() => void chooseFolder()} onCreateFolder={() => setNewFolderOpen(true)} onSignedOut={() => setSession(undefined)} onNotice={setMessage} onProviderConfigured={() => { setProviderConfigured(true); setMessage('Provider key saved. You are ready to capture.'); }} /> : <>
+    {session.drive.folderId && !providerStatus.providers.length && <div className="onboarding"><KeyRound /><div><strong>{providerStatus.freeTierAvailable && providerStatus.freeTasksRemaining > 0 ? `${providerStatus.freeTasksRemaining} free note${providerStatus.freeTasksRemaining === 1 ? '' : 's'} remaining` : 'Add your provider API key'}</strong><p>{providerStatus.freeTierAvailable && providerStatus.freeTasksRemaining > 0 ? `Voluble will use its hosted ${providerStatus.freeTierProvider === 'openai' ? 'OpenAI' : 'Gemini'} provider for your first ${providerStatus.freeTaskLimit} notes. After that, add your own OpenAI or Gemini key to continue.` : providerStatus.freeTierAvailable ? 'Your 10 free notes are finished. Add an OpenAI or Gemini API key to keep creating notes.' : 'Add an OpenAI or Gemini API key in Settings before starting your first capture.'}</p></div><div className="folder-actions"><button className="primary" onClick={() => { setView('Settings'); setMobileNav(false); }}>Open Settings</button></div></div>}
+    {view === 'Settings' ? <Settings preferences={preferences} onPreferences={setPreferences} folderId={session.drive.folderId} onChooseFolder={() => void chooseFolder()} onCreateFolder={() => setNewFolderOpen(true)} onSignedOut={() => setSession(undefined)} onNotice={setMessage} onProviderConfigured={() => { void api.providerStatus().then(setProviderStatus); setMessage('Provider key saved. You are ready to capture.'); }} /> : <>
       <div className="section-heading library-heading"><div><span className="eyebrow">Your library</span><h1>{view === 'All' ? 'All records' : view}</h1></div><div className="heading-actions"><button onClick={() => setExportOpen(true)}>Export</button><button className="primary desktop-capture" onClick={startCapture}><Mic size={17} /> Capture</button></div></div>
-      {!session.drive.folderId && <div className="onboarding"><CloudIcon /><div><strong>Choose your Voluble folder</strong><p>Use an existing folder or create a new one in My Drive. Voluble will never silently switch it.</p></div><div className="folder-actions"><button onClick={() => setNewFolderOpen(true)}><FolderPlus size={17} /> Create new folder</button><button className="primary" onClick={() => void chooseFolder()}>Choose existing folder</button></div></div>}
+      {!session.drive.folderId && <div className="onboarding"><CloudIcon /><div><strong>Create your first 10 notes free</strong><p>First choose an existing Drive folder or create a new one. You will not need an API key for your first 10 notes; after that, add your own OpenAI or Gemini key to continue. Voluble will never silently switch folders.</p></div><div className="folder-actions"><button onClick={() => setNewFolderOpen(true)}><FolderPlus size={17} /> Create new folder</button><button className="primary" onClick={() => void chooseFolder()}>Choose existing folder</button></div></div>}
       <div className="toolbar"><label className="search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles, text, transcripts, tags…" /></label><label className="sort">Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option></select><ChevronDown /></label></div>
       {shown.length ? <div className="record-grid">{shown.map((record) => <RecordCard key={record.id} record={record} readOnly={sync === 'disconnected'} processing={processingRecords.has(record.id)} onEdit={() => sync === 'disconnected' ? setMessage('Cached Drive records are read-only until you reconnect Google.') : setEditing(record)} onSave={(value) => void save(value)} onRetry={() => void retryProcessing(record)} onDownload={download} />)}</div> : <div className="empty-state"><NotebookPen /><h2>{query ? 'No matching records' : 'Nothing here yet'}</h2><p>{query ? 'Try a different phrase or category.' : 'Capture a thought and Voluble will turn it into a useful record.'}</p><button className="primary" onClick={startCapture}><Mic /> Start a capture</button></div>}
-    </>}</main>{editing && <RecordEditor record={editing} timezone={preferences.timezone} onSave={(value) => void save(value)} onTrash={(value) => void trash(value)} onClose={() => setEditing(undefined)} />}{recording && <RecorderPanel provider={preferences.transcription} fallbackProvider={preferences.transcriptionFallback} cleanupProvider={preferences.cleanup} language={preferences.language} timezone={preferences.timezone} onRecords={(values) => { for (const value of values) void save(value); }} onClose={() => setRecording(false)} />}{newFolderOpen && <NewFolderDialog onCreate={createFolder} onClose={() => setNewFolderOpen(false)} />}{exportOpen && <ExportDialog records={records} onClose={() => setExportOpen(false)} />}</div>;
+    </>}</main>{editing && <RecordEditor record={editing} timezone={preferences.timezone} onSave={(value) => void save(value)} onTrash={(value) => void trash(value)} onClose={() => setEditing(undefined)} />}{recording && <RecorderPanel provider={recorderProvider} fallbackProvider={recorderFallback} cleanupProvider={recorderCleanup} language={preferences.language} timezone={preferences.timezone} onRecords={(values) => { for (const value of values) void save(value); }} onFreeTasksRemaining={(remaining) => setProviderStatus((current) => ({ ...current, freeTasksRemaining: remaining }))} onClose={() => setRecording(false)} />}{newFolderOpen && <NewFolderDialog onCreate={createFolder} onClose={() => setNewFolderOpen(false)} />}{exportOpen && <ExportDialog records={records} onClose={() => setExportOpen(false)} />}</div>;
 }
 
 function Brand() { return <div className="brand"><div className="brand-mark small"><span /><span /><span /><span /><span /></div><strong>voluble</strong></div>; }

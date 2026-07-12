@@ -4,7 +4,8 @@ import { accessToken } from '../../server/google.js';
 import { createFile, fileContent, findChildren, updateFile } from '../../server/drive.js';
 import { allow, fail } from '../../server/http.js';
 import { encryptEnvelope, withDecryptedEnvelope } from '../../server/security.js';
-import { cleanup, models, transcribe, type ProviderKeys, type ProviderName } from '../../server/provider.js';
+import { cleanup, models, sharedProviderCredential, transcribe, type ProviderKeys, type ProviderName } from '../../server/provider.js';
+import { FREE_TASK_LIMIT, freeTasksRemaining, refundFreeTask, reserveFreeTask, type AccountRow } from '../../server/db.js';
 
 async function context(req: VercelRequest) {
   const { account } = await requireSession(req);
@@ -12,19 +13,43 @@ async function context(req: VercelRequest) {
   const token = await accessToken(account.refresh_token_envelope);
   const hidden = (await findChildren(token, account.root_folder_id, '.voluble'))[0];
   if (!hidden) throw Object.assign(new Error('Voluble Drive metadata folder is missing.'), { status: 409 });
-  return { token, hidden };
+  return { token, hidden, account };
 }
 
-async function credentialEnvelope(token: string, hiddenId: string) {
+async function configuredProviders(token: string, hiddenId: string): Promise<ProviderName[]> {
   const file = (await findChildren(token, hiddenId, 'credentials.enc.json'))[0];
-  if (!file) throw Object.assign(new Error('Configure the selected provider first.'), { status: 409, code: 'credentials_required' });
-  return { file, envelope: JSON.parse(await fileContent(token, file.id)) };
+  if (!file) return [];
+  const envelope = JSON.parse(await fileContent(token, file.id));
+  return withDecryptedEnvelope(envelope, async (plaintext) => {
+    const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
+    return (['openai', 'gemini'] as ProviderName[]).filter((provider) => Boolean(keys[provider]));
+  });
+}
+
+async function withProviderKey<T>(token: string, hiddenId: string, account: AccountRow, requested: ProviderName, work: (provider: ProviderName, key: string, shared: boolean) => Promise<T>): Promise<T> {
+  const file = (await findChildren(token, hiddenId, 'credentials.enc.json'))[0];
+  if (file) {
+    const envelope = JSON.parse(await fileContent(token, file.id));
+    return withDecryptedEnvelope(envelope, async (plaintext) => {
+      const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
+      if (keys[requested]) return work(requested, keys[requested], false);
+      if (Object.values(keys).some(Boolean)) throw Object.assign(new Error(`Configure ${requested} first or select a provider whose key you have saved.`), { status: 409, code: 'credentials_required' });
+      const shared = sharedProviderCredential();
+      if (!shared) throw Object.assign(new Error('Add an OpenAI or Gemini API key in Settings to continue.'), { status: 409, code: 'credentials_required' });
+      if (freeTasksRemaining(account) <= 0) throw Object.assign(new Error('Your 10 free notes have been used. Add your own API key in Settings to continue.'), { status: 402, code: 'free_limit_reached' });
+      return work(shared.provider, shared.key, true);
+    });
+  }
+  const shared = sharedProviderCredential();
+  if (!shared) throw Object.assign(new Error('Add an OpenAI or Gemini API key in Settings to continue.'), { status: 409, code: 'credentials_required' });
+  if (freeTasksRemaining(account) <= 0) throw Object.assign(new Error('Your 10 free notes have been used. Add your own API key in Settings to continue.'), { status: 402, code: 'free_limit_reached' });
+  return work(shared.provider, shared.key, true);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const action = String(req.query.action ?? '');
-    const { token, hidden } = await context(req);
+    const { token, hidden, account } = await context(req);
     if (action === 'configure') {
       allow(req, ['PUT']);
       const keys = req.body?.keys as ProviderKeys;
@@ -44,16 +69,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (action === 'status') {
       allow(req, ['GET']);
-      const file = (await findChildren(token, hidden.id, 'credentials.enc.json'))[0];
-      if (!file) return res.status(200).json({ providers: [] });
-      const envelope = JSON.parse(await fileContent(token, file.id));
-      const providers = await withDecryptedEnvelope(envelope, async (plaintext) => {
-        const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
-        return (['openai', 'gemini'] as ProviderName[]).filter((provider) => Boolean(keys[provider]));
-      });
-      return res.status(200).json({ providers });
+      const providers = await configuredProviders(token, hidden.id);
+      const shared = sharedProviderCredential();
+      return res.status(200).json({ providers, freeTierAvailable: Boolean(shared), freeTierProvider: shared?.provider ?? null, freeTaskLimit: FREE_TASK_LIMIT, freeTasksRemaining: freeTasksRemaining(account) });
     }
-    const { envelope } = await credentialEnvelope(token, hidden.id);
     if (action === 'transcribe') {
       allow(req, ['POST']);
       const provider = String(req.body?.provider) as ProviderName;
@@ -61,12 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const audio = Buffer.from(String(req.body?.audio ?? ''), 'base64');
       if (!audio.length || audio.length > 8 * 1024 * 1024) throw Object.assign(new Error('Audio chunk must be between 1 byte and 8 MB.'), { status: 413 });
       try {
-        const result = await withDecryptedEnvelope(envelope, async (plaintext) => {
-          const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
-          const key = keys[provider];
-          if (!key) throw Object.assign(new Error(`Configure ${provider} first.`), { status: 409 });
-          return transcribe(provider, key, audio, String(req.body?.language ?? 'en-US'));
-        });
+        const result = await withProviderKey(token, hidden.id, account, provider, async (actualProvider, key) => ({ ...(await transcribe(actualProvider, key, audio, String(req.body?.language ?? 'en-US'))), provider: actualProvider }));
         return res.status(200).json(result);
       } finally { audio.fill(0); }
     }
@@ -79,13 +93,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(); } catch { timezone = 'UTC'; }
       const requestedReference = String(req.body?.referenceTime ?? '');
       const referenceTime = Number.isFinite(Date.parse(requestedReference)) ? new Date(requestedReference).toISOString() : new Date().toISOString();
-      const result = await withDecryptedEnvelope(envelope, async (plaintext) => {
-        const keys = JSON.parse(plaintext.toString('utf8')) as ProviderKeys;
-        const key = keys[provider];
-        if (!key) throw Object.assign(new Error(`Configure ${provider} first.`), { status: 409 });
-        return cleanup(provider, key, transcript, String(req.body?.language ?? 'en-US'), timezone, referenceTime);
+      const response = await withProviderKey(token, hidden.id, account, provider, async (actualProvider, key, shared) => {
+        let remaining = freeTasksRemaining(account);
+        if (shared) remaining = await reserveFreeTask(account.google_sub);
+        try {
+          const result = await cleanup(actualProvider, key, transcript, String(req.body?.language ?? 'en-US'), timezone, referenceTime);
+          return { result, model: models[actualProvider].cleanup, provider: actualProvider, freeTasksRemaining: remaining };
+        } catch (error) {
+          if (shared) await refundFreeTask(account.google_sub).catch(() => undefined);
+          throw error;
+        }
       });
-      return res.status(200).json({ result, model: models[provider].cleanup });
+      return res.status(200).json(response);
     }
     throw Object.assign(new Error('Unknown provider action.'), { status: 404 });
   } catch (error) { fail(res, error); }

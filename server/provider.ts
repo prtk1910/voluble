@@ -3,6 +3,13 @@ import { cleanedResponseSchema } from '../src/domain/record.js';
 export type ProviderName = 'openai' | 'gemini';
 export type ProviderKeys = Partial<Record<ProviderName, string>>;
 
+export function sharedProviderCredential(environment: NodeJS.ProcessEnv = process.env): { provider: ProviderName; key: string } | undefined {
+  const openai = environment.OPENAI_FREE_TIER_API_KEY?.trim();
+  if (openai) return { provider: 'openai', key: openai };
+  const gemini = environment.GEMINI_FREE_TIER_API_KEY?.trim();
+  return gemini ? { provider: 'gemini', key: gemini } : undefined;
+}
+
 export const models = {
   openai: { transcription: 'gpt-4o-transcribe-diarize', transcriptionFallback: 'gpt-4o-mini-transcribe', cleanup: process.env.OPENAI_CLEANUP_MODEL ?? 'gpt-5.4-mini-2026-03-17' },
   gemini: { transcription: 'gemini-3.5-flash', cleanup: 'gemini-3.5-flash' }

@@ -12,7 +12,7 @@ Voluble is a responsive React PWA with Vercel serverless APIs, Google OAuth and 
 
 | Landing page | Record library | Voice recorder | Shopping list |
 | --- | --- | --- | --- |
-| [![Voluble landing page](screenshots/Landing%20Page.png)](screenshots/Landing%20Page.png) | [![Voluble record library](screenshots/All%20Records.png)](screenshots/All%20Records.png) | [![Voluble voice recorder](screenshots/Recorder.png)](screenshots/Recorder.png) | [![Voluble shopping list](screenshots/Shopping%20List.png)](screenshots/Shopping%20List.png) |
+| [![Voluble landing page](screenshots/Landing%20Page.png)](screenshots/Landing%20Page.png) | [![Voluble record library](screenshots/All%20records.png)](screenshots/All%20records.png) | [![Voluble voice recorder](screenshots/Recorder.png)](screenshots/Recorder.png) | [![Voluble shopping list](screenshots/Shopping%20List.png)](screenshots/Shopping%20List.png) |
 
 Select a preview to view it at full size.
 
@@ -22,6 +22,7 @@ Select a preview to view it at full size.
 - Uses on-device speech recognition when the browser and language pack support it.
 - Falls back to OpenAI or Gemini cloud transcription when configured.
 - Independently selects a provider for transcription and for cleanup/categorization.
+- Lets new users create their first 10 notes without a provider key when a hosted OpenAI or Gemini key is configured.
 - Detects captures containing multiple useful record types and suggests splitting them into separate records.
 - Formats meeting minutes into speaker-attributed blocks when the transcription provider supports diarization.
 - Stores cleaned content alongside the original transcript for auditability.
@@ -67,7 +68,9 @@ Open **Settings** and choose providers independently:
 - **Cleanup and categorization:** none, OpenAI, or Gemini.
 - **Language:** the language used by local recognition and cloud transcription.
 
-After the Drive folder is connected, an onboarding banner directs new users to Settings to add a provider key. If OpenAI or Gemini is selected, enter the corresponding provider key there. Provider keys are not server environment variables. Voluble envelope-encrypts them and writes only the encrypted envelope to the selected Drive folder.
+Immediately after the first sign-in, the folder-selection banner explains that the user's first 10 notes are free and that a personal key is required afterward. Once the Drive folder is connected, the onboarding banner shows the remaining free notes and directs users to Settings. A successful cleanup/categorization call consumes one free note; a multi-record split from the same capture still consumes only one. Failed provider calls are refunded.
+
+For unlimited use, enter an OpenAI or Gemini key in Settings. User-owned keys are not server environment variables: Voluble envelope-encrypts them and writes only the encrypted envelope to the selected Drive folder. Once a personal key is saved, that provider is used without consuming the hosted allowance.
 
 ### 3. Capture a record
 
@@ -109,6 +112,7 @@ If Drive and the local copy changed concurrently, Voluble compares their `update
 - Google Drive is authoritative for user content. PostgreSQL stores only minimal account/session metadata, the encrypted refresh token envelope, Drive connection state, and the selected folder pointer.
 - Google refresh tokens and provider credentials use AES-256-GCM envelope encryption. Google Cloud KMS wraps each data-encryption key.
 - Provider credentials are fetched, unwrapped, and decrypted for one provider invocation only. Mutable plaintext buffers are overwritten in `finally` blocks and are not stored in module globals or cross-request caches.
+- Hosted free-allowance credentials remain server-only Vercel environment variables and are never returned to the browser or written to a user's Drive.
 - Application code does not log request bodies, authorization headers, audio, transcripts, provider keys, or KMS plaintext.
 - Audio is not written to Drive, IndexedDB, Cache Storage, backend disk, or provider file-upload storage.
 - OpenAI cleanup uses the pinned `gpt-5.4-mini-2026-03-17` snapshot with Responses API storage disabled. OpenAI transcription prefers `gpt-4o-transcribe-diarize` for speaker blocks and falls back to `gpt-4o-mini-transcribe` when diarization is unavailable.
@@ -211,6 +215,8 @@ For production, create and version an equivalent managed migration before direct
 | `SESSION_SECRET` | Yes | High-entropy secret used to authenticate short-lived OAuth state tokens. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Conditional | Local path to a Google service-account JSON file. Omit when Application Default Credentials are already available. |
 | `OPENAI_CLEANUP_MODEL` | No | Overrides the pinned OpenAI cleanup snapshot. Leave unset for reproducible default behavior. |
+| `OPENAI_FREE_TIER_API_KEY` | Conditional | Server-only OpenAI key used for the 10-note hosted allowance. Preferred when both hosted keys are set. |
+| `GEMINI_FREE_TIER_API_KEY` | Conditional | Server-only Gemini key used for the hosted allowance when no hosted OpenAI key is set. |
 
 Generate a session secret with:
 
@@ -218,7 +224,7 @@ Generate a session secret with:
 openssl rand -base64 48
 ```
 
-OpenAI and Gemini user API keys are deliberately absent from `.env.example`; enter them through the application Settings page.
+Set at least one hosted provider key to enable the 10-note keyless allowance. These deployment-owned keys are distinct from user API keys entered through Settings. If neither hosted key is set, users must add their own key before processing a capture.
 
 ### Run locally
 
@@ -258,10 +264,11 @@ Live OAuth, Picker, Drive, KMS, provider, revocation, and account-deletion verif
 
 1. Import the repository into Vercel and attach a PostgreSQL integration that exposes `POSTGRES_URL`.
 2. Add every required variable from `.env.example` for Preview and Production as appropriate.
-3. Provide Google Application Default Credentials to the Vercel runtime, preferably through workload identity federation or another short-lived identity mechanism. Avoid committing service-account JSON.
-4. Set `APP_URL` to the final HTTPS origin.
-5. Add `${APP_URL}/api/auth/callback` to the Google OAuth client and add the origin to the Picker key restrictions.
-6. Deploy and test login, folder selection, KMS encryption, provider configuration, one record write, an ICS update, sign-out, and token revocation.
+3. To enable the free allowance, add `OPENAI_FREE_TIER_API_KEY` or `GEMINI_FREE_TIER_API_KEY` as a server-only Vercel secret. If both are present, Voluble uses OpenAI.
+4. Provide Google Application Default Credentials to the Vercel runtime, preferably through workload identity federation or another short-lived identity mechanism. Avoid committing service-account JSON.
+5. Set `APP_URL` to the final HTTPS origin.
+6. Add `${APP_URL}/api/auth/callback` to the Google OAuth client and add the origin to the Picker key restrictions.
+7. Deploy and test login, folder selection, the free allowance, KMS encryption, personal provider configuration, one record write, an ICS update, sign-out, and token revocation.
 
 `vercel.json` defines the PWA deployment, serverless duration, security headers, Content Security Policy, and microphone permission policy.
 
