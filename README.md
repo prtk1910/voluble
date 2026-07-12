@@ -188,6 +188,7 @@ For production, create and version an equivalent managed migration before direct
 | `GOOGLE_KMS_KEY_NAME` | Yes | Full KMS CryptoKey resource name. |
 | `GCP_PROJECT_NUMBER` | On Vercel | Numeric project number used by Workload Identity Federation. |
 | `GCP_SERVICE_ACCOUNT_EMAIL` | On Vercel | Service account impersonated by the Vercel workload identity. |
+| `GCP_SERVICE_ACCOUNT_ID` | Recommended on Vercel | Immutable numeric service-account ID used instead of email lookup. |
 | `GCP_WORKLOAD_IDENTITY_POOL_ID` | On Vercel | Workload Identity Pool ID, commonly `vercel`. |
 | `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | On Vercel | OIDC provider ID, commonly `vercel`. |
 | `POSTGRES_URL` | Yes | PostgreSQL connection string used by `@vercel/postgres`. |

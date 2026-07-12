@@ -6,9 +6,9 @@ import { localRecognition, PcmRecorder } from '../recording/recorder';
 import { toBase64 } from '../recording/pcm';
 
 type CloudProvider = 'openai' | 'gemini';
-type Props = { provider: 'local' | CloudProvider; fallbackProvider: CloudProvider; cleanupProvider: 'none' | CloudProvider; language: string; onRecord(record: VolubleRecord): void; onClose(): void };
+type Props = { provider: 'local' | CloudProvider; fallbackProvider: CloudProvider; cleanupProvider: 'none' | CloudProvider; language: string; timezone: string; onRecord(record: VolubleRecord): void; onClose(): void };
 
-export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, language, onRecord, onClose }: Props) {
+export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, language, timezone, onRecord, onClose }: Props) {
   const [state, setState] = useState<'ready' | 'preparing' | 'recording' | 'processing' | 'error'>('ready');
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState('');
@@ -73,7 +73,7 @@ export function RecorderPanel({ provider, fallbackProvider, cleanupProvider, lan
       if (cleanupProvider === 'none') {
         onRecord(createRecord({ title: transcript.trim().slice(0, 70), content: transcript, originalTranscript: transcript, status: 'pending-processing', provenance: { transcription: activeProvider.current, cleanup: 'none' } }));
       } else {
-        const { result, model } = await api.cleanup(cleanupProvider, transcript, language);
+        const { result, model } = await api.cleanup(cleanupProvider, transcript, language, timezone);
         onRecord(createRecord({ ...result, tasks: result.tasks.map((task) => ({ ...task, id: crypto.randomUUID() })), originalTranscript: transcript, provenance: { transcription: activeProvider.current, cleanup: cleanupProvider, cleanupModel: model } }));
       }
       onClose();

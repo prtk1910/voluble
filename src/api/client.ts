@@ -59,11 +59,11 @@ export const api = {
   },
   configureProviders: (keys: { openai?: string; gemini?: string }) => request('/api/provider/configure', { method: 'PUT', body: JSON.stringify({ keys }) }),
   transcribe: (provider: 'openai' | 'gemini', audio: string, language: string) => request<{ text: string; model: string }>('/api/provider/transcribe', { method: 'POST', body: JSON.stringify({ provider, audio, language }) }),
-  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string) => request<{ result: Omit<VolubleRecord, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion' | 'language' | 'status' | 'provenance' | 'originalTranscript' | 'drive'>; model: string }>('/api/provider/cleanup', {
+  cleanup: (provider: 'openai' | 'gemini', transcript: string, language: string, timezone: string) => request<{ result: Omit<VolubleRecord, 'id' | 'createdAt' | 'updatedAt' | 'schemaVersion' | 'language' | 'status' | 'provenance' | 'originalTranscript' | 'drive'>; model: string }>('/api/provider/cleanup', {
     method: 'POST',
     body: JSON.stringify({
       provider, transcript, language,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      timezone,
       referenceTime: new Date().toISOString()
     })
   })

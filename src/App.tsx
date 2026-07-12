@@ -13,11 +13,12 @@ import { RecorderPanel } from './components/RecorderPanel';
 import { ConflictCenter } from './components/ConflictCenter';
 import { Settings, type Preferences } from './components/Settings';
 import { NewFolderDialog } from './components/NewFolderDialog';
+import { browserTimeZone } from './domain/timezone';
 
 type Session = Awaited<ReturnType<typeof api.session>>;
 type View = 'All' | Category | 'Conflicts' | 'Settings';
 const iconFor: Record<Category, typeof FileText> = { Tasks: CheckSquare2, Reminders: CalendarClock, Notes: NotebookPen, 'Meeting Minutes': ListChecks, 'Shopping Lists': ShoppingBasket, Other: Archive };
-const initialPreferences: Preferences = { transcription: 'local', transcriptionFallback: 'openai', cleanup: 'openai', language: 'en-US' };
+const initialPreferences: Preferences = { transcription: 'local', transcriptionFallback: 'openai', cleanup: 'openai', language: 'en-US', timezone: browserTimeZone() };
 
 function download(name: string, value: string, type: string) {
   const url = URL.createObjectURL(new Blob([value], { type }));
@@ -126,7 +127,7 @@ export default function App() {
     if (preferences.cleanup === 'none') { setMessage('Choose OpenAI or Gemini for cleanup and categorization in Settings, then retry.'); return; }
     setProcessingRecords((current) => new Set(current).add(record.id));
     try {
-      const { result, model } = await api.cleanup(preferences.cleanup, transcript, record.language);
+      const { result, model } = await api.cleanup(preferences.cleanup, transcript, record.language, preferences.timezone);
       const processed = recordSchema.parse({
         ...repaired,
         ...result,
@@ -156,7 +157,7 @@ export default function App() {
       {!session.drive.folderId && <div className="onboarding"><CloudIcon /><div><strong>Choose your Voluble folder</strong><p>Use an existing folder or create a new one in My Drive. Voluble will never silently switch it.</p></div><div className="folder-actions"><button onClick={() => setNewFolderOpen(true)}><FolderPlus size={17} /> Create new folder</button><button className="primary" onClick={() => void chooseFolder()}>Choose existing folder</button></div></div>}
       <div className="toolbar"><label className="search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles, text, transcripts, tags…" /></label><label className="sort">Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option></select><ChevronDown /></label></div>
       {shown.length ? <div className="record-grid">{shown.map((record) => <article className="record-card" key={record.id} onClick={() => sync === 'disconnected' ? setMessage('Cached Drive records are read-only until you reconnect Google. New unsynchronized captures remain safe locally.') : setEditing(record)}><div className="record-meta"><span className={`category-dot c-${categories.indexOf(record.category)}`} />{record.category}<time>{new Date(record.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</time></div><h2>{record.title}</h2><p>{record.content || record.originalTranscript || 'No text yet'}</p>{record.tags.length > 0 && <div className="tags"><Tag />{record.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}</div>}<footer><span className={`status ${record.status}`}>{record.status.replace('-', ' ')}</span><div className="record-actions">{record.status === 'pending-processing' && <button className="retry-processing" disabled={processingRecords.has(record.id)} onClick={(event) => { event.stopPropagation(); void retryProcessing(record); }}><RotateCw size={13} /> {processingRecords.has(record.id) ? 'Processing…' : 'Retry processing'}</button>}{record.category === 'Reminders' && record.event && <div className="calendar-actions"><button onClick={(event) => { event.stopPropagation(); window.open(googleCalendarUrl(record), '_blank', 'noopener'); }}>Google Calendar</button><button onClick={(event) => { event.stopPropagation(); download(`${record.title}.ics`, generateIcs(record), 'text/calendar'); }}>ICS</button></div>}</div></footer></article>)}</div> : <div className="empty-state"><NotebookPen /><h2>{query ? 'No matching records' : 'Nothing here yet'}</h2><p>{query ? 'Try a different phrase or category.' : 'Capture a thought and Voluble will turn it into a useful record.'}</p><button className="primary" onClick={() => setRecording(true)}><Mic /> Start a capture</button></div>}
-    </>}</main>{editing && <RecordEditor record={editing} onSave={(value) => void save(value)} onTrash={(value) => void trash(value)} onClose={() => setEditing(undefined)} />}{recording && <RecorderPanel provider={preferences.transcription} fallbackProvider={preferences.transcriptionFallback} cleanupProvider={preferences.cleanup} language={preferences.language} onRecord={(value) => void save(value)} onClose={() => setRecording(false)} />}{newFolderOpen && <NewFolderDialog onCreate={createFolder} onClose={() => setNewFolderOpen(false)} />}</div>;
+    </>}</main>{editing && <RecordEditor record={editing} timezone={preferences.timezone} onSave={(value) => void save(value)} onTrash={(value) => void trash(value)} onClose={() => setEditing(undefined)} />}{recording && <RecorderPanel provider={preferences.transcription} fallbackProvider={preferences.transcriptionFallback} cleanupProvider={preferences.cleanup} language={preferences.language} timezone={preferences.timezone} onRecord={(value) => void save(value)} onClose={() => setRecording(false)} />}{newFolderOpen && <NewFolderDialog onCreate={createFolder} onClose={() => setNewFolderOpen(false)} />}</div>;
 }
 
 function Brand() { return <div className="brand"><div className="brand-mark small"><span /><span /><span /><span /><span /></div><strong>voluble</strong></div>; }

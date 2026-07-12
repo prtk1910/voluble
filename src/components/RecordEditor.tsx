@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Calendar, Plus, Save, Trash2, X } from 'lucide-react';
 import { categories, recordSchema, type VolubleRecord } from '../domain/record';
+import { localDateTimeValue, utcFromLocalDateTime } from '../domain/timezone';
 
-type Props = { record: VolubleRecord; onSave(record: VolubleRecord): void; onTrash(record: VolubleRecord): void; onClose(): void };
+type Props = { record: VolubleRecord; timezone: string; onSave(record: VolubleRecord): void; onTrash(record: VolubleRecord): void; onClose(): void };
 
-export function RecordEditor({ record, onSave, onTrash, onClose }: Props) {
+export function RecordEditor({ record, timezone, onSave, onTrash, onClose }: Props) {
   const [draft, setDraft] = useState(record);
   useEffect(() => setDraft(record), [record]);
   const update = <K extends keyof VolubleRecord>(key: K, value: VolubleRecord[K]) => setDraft((current) => ({ ...current, [key]: value }));
@@ -34,8 +35,8 @@ export function RecordEditor({ record, onSave, onTrash, onClose }: Props) {
         <label className="wide">Original transcript<textarea rows={5} value={draft.originalTranscript} onChange={(event) => update('originalTranscript', event.target.value)} /></label>
         {draft.category === 'Reminders' && <label className="event-toggle wide"><input type="checkbox" checked={Boolean(draft.event)} onChange={(event) => update('event', event.target.checked ? { start: new Date().toISOString(), allDay: false } : undefined)} /><Calendar size={18} /> Calendar event</label>}
         {draft.category === 'Reminders' && draft.event && <>
-          <label>Starts<input type="datetime-local" value={draft.event.start.slice(0, 16)} onChange={(event) => update('event', { ...draft.event!, start: new Date(event.target.value).toISOString() })} /></label>
-          <label>Ends<input type="datetime-local" value={draft.event.end?.slice(0, 16) ?? ''} onChange={(event) => update('event', { ...draft.event!, end: event.target.value ? new Date(event.target.value).toISOString() : undefined })} /></label>
+          <label>Starts ({timezone.replace(/_/g, ' ')})<input type="datetime-local" value={localDateTimeValue(draft.event.start, timezone)} onChange={(event) => update('event', { ...draft.event!, start: utcFromLocalDateTime(event.target.value, timezone) })} /></label>
+          <label>Ends ({timezone.replace(/_/g, ' ')})<input type="datetime-local" value={draft.event.end ? localDateTimeValue(draft.event.end, timezone) : ''} onChange={(event) => update('event', { ...draft.event!, end: event.target.value ? utcFromLocalDateTime(event.target.value, timezone) : undefined })} /></label>
         </>}
       </div>
       <footer><button className="danger ghost" onClick={() => onTrash(record)}><Trash2 size={17} /> Move to Drive trash</button><div><button className="ghost" onClick={onClose}>Cancel</button><button className="primary" onClick={save}><Save size={17} /> Save changes</button></div></footer>

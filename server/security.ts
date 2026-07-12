@@ -14,22 +14,24 @@ export type Envelope = {
   createdAt: string;
 };
 
-const oidcNames = ['GCP_PROJECT_NUMBER', 'GCP_SERVICE_ACCOUNT_EMAIL', 'GCP_WORKLOAD_IDENTITY_POOL_ID', 'GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID'] as const;
+const oidcNames = ['GCP_PROJECT_NUMBER', 'GCP_WORKLOAD_IDENTITY_POOL_ID', 'GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID'] as const;
 
 async function kmsClient(): Promise<KeyManagementServiceClient> {
   const usesOidc = oidcNames.some((name) => process.env[name]);
   if (!usesOidc) return new KeyManagementServiceClient();
   const values = Object.fromEntries(oidcNames.map((name) => {
-    const value = process.env[name];
+    const value = process.env[name]?.trim();
     if (!value) throw new Error(`Missing required environment variable for GCP workload identity: ${name}`);
     return [name, value];
   })) as Record<typeof oidcNames[number], string>;
+  const serviceAccount = process.env.GCP_SERVICE_ACCOUNT_ID?.trim() || process.env.GCP_SERVICE_ACCOUNT_EMAIL?.trim();
+  if (!serviceAccount) throw new Error('Missing required environment variable for GCP workload identity: GCP_SERVICE_ACCOUNT_ID or GCP_SERVICE_ACCOUNT_EMAIL');
   const authClient = ExternalAccountClient.fromJSON({
     type: 'external_account',
     audience: `//iam.googleapis.com/projects/${values.GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${values.GCP_WORKLOAD_IDENTITY_POOL_ID}/providers/${values.GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID}`,
     subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
     token_url: 'https://sts.googleapis.com/v1/token',
-    service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${values.GCP_SERVICE_ACCOUNT_EMAIL}:generateAccessToken`,
+    service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${serviceAccount}:generateAccessToken`,
     scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     subject_token_supplier: { getSubjectToken: () => getVercelOidcToken() }
   });
