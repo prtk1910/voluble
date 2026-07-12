@@ -4,7 +4,7 @@ import { ApiError, api } from './api/client';
 import { categories, createRecord, recordSchema, type Category, type VolubleRecord } from './domain/record';
 import { generateIcs, googleCalendarUrl } from './domain/ics';
 import { repairTranscript } from './domain/markdown';
-import type { Conflict } from './domain/conflict';
+import { newerConflictVersion, type Conflict } from './domain/conflict';
 import { filterRecords } from './search/index';
 import { cacheRecords, cachedRecords, confirmDeletions, deletionTombstones, pendingOperations, readState, removeOperation, resetDriveCache, writeState } from './sync/outbox';
 import { chooseDriveFolder } from './drive/picker';
@@ -89,7 +89,7 @@ export default function App() {
     }
   };
   const shown = useMemo(() => filterRecords(records, { query, category: categories.includes(view as Category) ? view as Category : 'All', sort }), [records, query, view, sort]);
-  const save = async (record: VolubleRecord) => {
+  const save = async (record: VolubleRecord, conflictRetries = 0) => {
     setRecords((current) => [...current.filter((item) => item.id !== record.id), record]); setEditing(undefined); setSync('syncing');
     try {
       if (!session?.drive.folderId) { setSync('pending'); return; }
@@ -97,8 +97,20 @@ export default function App() {
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         const remote = (await api.records()).records.find((item) => item.id === record.id);
-        if (remote) setConflicts((current) => [...current, { id: crypto.randomUUID(), local: record, remote, localDevice: navigator.userAgent, detectedAt: new Date().toISOString() }]);
-        setView('Conflicts'); setSync('pending');
+        if (!remote) { setSync('pending'); setMessage('The Drive version could not be loaded. This change remains queued for retry.'); return; }
+        const newer = newerConflictVersion(record, remote);
+        if (newer === 'remote') {
+          setRecords((current) => [...current.filter((item) => item.id !== remote.id), remote]);
+          setSync('idle'); setMessage(`Kept the newer Drive version of “${remote.title}”.`);
+        } else if (newer === 'local' && conflictRetries < 2) {
+          const winner = { ...record, drive: remote.drive };
+          setMessage(`Saving the newer local version of “${winner.title}”.`);
+          await save(winner, conflictRetries + 1);
+        } else {
+          setConflicts((current) => [...current.filter((item) => item.local.id !== record.id), { id: crypto.randomUUID(), local: record, remote, localDevice: navigator.userAgent, detectedAt: new Date().toISOString() }]);
+          setView('Conflicts'); setSync('pending');
+          setMessage(newer === 'tie' ? 'Both versions have the same update time. Review the tie in Conflict Center.' : 'The record changed repeatedly while saving. Review it in Conflict Center.');
+        }
       } else if (error instanceof ApiError && error.status === 401) { setSync('disconnected'); setMessage('Google authorization expired. Reconnect to resume remote writes; your local text is safe.'); }
       else { setSync('pending'); setMessage('Drive is temporarily unavailable. This text is queued for retry.'); }
     }

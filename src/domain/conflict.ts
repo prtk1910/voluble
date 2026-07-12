@@ -13,6 +13,13 @@ export type ConflictResolution =
   | { action: 'merge'; value: VolubleRecord }
   | { action: 'keep-both' };
 
+export function newerConflictVersion(local: VolubleRecord, remote: VolubleRecord): 'local' | 'remote' | 'tie' {
+  const localTime = Date.parse(local.updatedAt); const remoteTime = Date.parse(remote.updatedAt);
+  if (localTime > remoteTime) return 'local';
+  if (remoteTime > localTime) return 'remote';
+  return 'tie';
+}
+
 export function resolveConflict(conflict: Conflict, resolution: ConflictResolution): VolubleRecord[] {
   if (resolution.action === 'keep-local') return [{ ...conflict.local, updatedAt: new Date().toISOString() }];
   if (resolution.action === 'keep-remote') return [conflict.remote];

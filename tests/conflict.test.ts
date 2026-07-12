@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { resolveConflict } from '../src/domain/conflict';
+import { newerConflictVersion, resolveConflict } from '../src/domain/conflict';
 import { createRecord } from '../src/domain/record';
 
 it('keeps both conflict versions with distinct UUIDs', () => {
@@ -7,4 +7,12 @@ it('keeps both conflict versions with distinct UUIDs', () => {
   const local = { ...remote, content: 'Local text' };
   const values = resolveConflict({ id: crypto.randomUUID(), local, remote, localDevice: 'phone', detectedAt: new Date().toISOString() }, { action: 'keep-both' });
   expect(values).toHaveLength(2); expect(values[0].id).not.toBe(values[1].id); expect(values.map((value) => value.content)).toEqual(['Drive text', 'Local text']);
+});
+
+it('automatically identifies the newer conflict version', () => {
+  const older = createRecord({ title: 'Plan', updatedAt: '2026-07-11T18:00:00.000Z' });
+  const newer = { ...older, content: 'Latest', updatedAt: '2026-07-11T18:01:00.000Z' };
+  expect(newerConflictVersion(older, newer)).toBe('remote');
+  expect(newerConflictVersion(newer, older)).toBe('local');
+  expect(newerConflictVersion(older, { ...older, content: 'Tie' })).toBe('tie');
 });
