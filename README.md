@@ -10,9 +10,9 @@ Voluble is a responsive React PWA with Vercel serverless APIs, Google OAuth and 
 
 ## Previews
 
-| Landing page | Record library | Voice recorder |
-| --- | --- | --- |
-| [![Voluble landing page](screenshots/Landing%20Page.png)](screenshots/Landing%20Page.png) | [![Voluble record library](screenshots/All%20records.png)](screenshots/All%20records.png) | [![Voluble voice recorder](screenshots/Recorder.png)](screenshots/Recorder.png) |
+| Landing page | Record library | Voice recorder | Shopping list |
+| --- | --- | --- | --- |
+| [![Voluble landing page](screenshots/Landing%20Page.png)](screenshots/Landing%20Page.png) | [![Voluble record library](screenshots/All%20Records.png)](screenshots/All%20Records.png) | [![Voluble voice recorder](screenshots/Recorder.png)](screenshots/Recorder.png) | [![Voluble shopping list](screenshots/Shopping%20List.png)](screenshots/Shopping%20List.png) |
 
 Select a preview to view it at full size.
 
@@ -22,8 +22,11 @@ Select a preview to view it at full size.
 - Uses on-device speech recognition when the browser and language pack support it.
 - Falls back to OpenAI or Gemini cloud transcription when configured.
 - Independently selects a provider for transcription and for cleanup/categorization.
+- Detects captures containing multiple useful record types and suggests splitting them into separate records.
+- Formats meeting minutes into speaker-attributed blocks when the transcription provider supports diarization.
 - Stores cleaned content alongside the original transcript for auditability.
-- Searches, sorts, filters, edits, recategorizes, completes, archives, and trashes records.
+- Searches, sorts, filters, edits, recategorizes, completes, archives, and deletes records.
+- Supports task checkboxes, editable shopping-list items, and status changes directly from record cards.
 - Synchronizes multiple devices through a user-selected Google Drive folder.
 - Resolves concurrent Drive edits automatically by keeping the newest timestamp.
 - Generates adjacent `.ics` calendar files and Google Calendar links without requesting Calendar access.
@@ -35,6 +38,8 @@ Select a preview to view it at full size.
 ### 1. Sign in and choose a Drive folder
 
 Select **Start with Google**, approve the requested `drive.file` permission, and either choose an existing folder with Google Picker or create a new folder in My Drive from Voluble. Folder selection is the first onboarding step; provider API keys remain locked until it is complete. Voluble creates its category structure inside the selected folder and never silently switches to a different folder.
+
+If Google sign-in cannot be completed, Voluble returns to the landing page with a clear error and a retry action instead of leaving the user on a raw API response.
 
 The resulting structure is:
 
@@ -62,22 +67,29 @@ Open **Settings** and choose providers independently:
 - **Cleanup and categorization:** none, OpenAI, or Gemini.
 - **Language:** the language used by local recognition and cloud transcription.
 
-If OpenAI or Gemini is selected, enter the corresponding provider key in Settings. Provider keys are not server environment variables. Voluble envelope-encrypts them and writes only the encrypted envelope to the selected Drive folder.
+After the Drive folder is connected, an onboarding banner directs new users to Settings to add a provider key. If OpenAI or Gemini is selected, enter the corresponding provider key there. Provider keys are not server environment variables. Voluble envelope-encrypts them and writes only the encrypted envelope to the selected Drive folder.
 
 ### 3. Capture a record
 
 Select **New capture** or **Capture**, start recording, and speak normally. Local interim results appear as you speak. During cloud transcription, Voluble converts microphone input to small 16 kHz mono WAV chunks in memory, sends them about every five seconds, and overwrites mutable audio buffers after use.
 
-If on-device recognition is unavailable, Voluble explains why and directs you to choose a cloud provider. If cleanup fails, the original transcript is preserved as a pending record. After correcting the provider or configuration issue, use **Retry processing** on that record to force another cleanup attempt without recording the audio again.
+If on-device recognition is unavailable or stops unexpectedly, Voluble automatically continues with the cloud fallback selected in Settings. If no usable fallback is configured, it shows an actionable explanation. If cleanup fails, the original transcript is preserved with a **Pending** status. After correcting the provider or configuration issue, use **Retry processing** on that record to force another cleanup attempt without recording the audio again.
+
+When one capture contains multiple independently useful categories, Voluble proposes an ideal split before saving. For example, “Remind me to go to Trader Joe's and buy onions, tomatoes, and carrots” can become both a reminder and a shopping list. You can create all suggested records, choose one suggestion, or keep the capture as a single record.
+
+For meeting minutes, cloud transcription attempts to detect speaker changes by voice similarity and formats the transcript into speaker blocks. Speakers receive neutral labels unless their names are explicitly available; Voluble does not guess identities.
 
 ### 4. Work with the library
 
-Use the sidebar to browse categories. Search includes titles, cleaned text, original transcripts, and tags. Open a record to edit its title, category, status, tags, text, transcript, and calendar fields.
+Use the sidebar to browse categories. Search includes titles, text, original transcripts, and tags. Change a record's status directly from its card. Task cards expose completion checkboxes, and checking every task marks the record completed.
+
+Open a record to edit its title, category, status, tags, and **Text**. The original transcript is read-only and collapsed by default, but can be expanded for auditability. Task details support editable subtasks, while shopping-list items can be added, renamed, checked, unchecked, or removed individually. Completing every subtask or shopping item marks its record completed. **Delete** moves the corresponding record to Drive trash.
 
 For records with event data:
 
 - **Google Calendar** opens a prefilled, user-initiated calendar page.
 - **ICS** downloads a standards-based calendar file for Apple Calendar and other clients.
+- **Time zone** defaults to the preference in Settings and can be changed for an individual record while editing its start and end times.
 
 Use **Export** to download either a ZIP of portable Markdown files or a complete JSON index. The Markdown and ICS files in Drive remain the canonical copy.
 
@@ -88,6 +100,7 @@ If Drive and the local copy changed concurrently, Voluble compares their `update
 ### 6. Understand account actions
 
 - **Sign out** removes the current session and local browser data but keeps the encrypted Google refresh token for a future login.
+- Select the profile name at the bottom of the sidebar to open the account menu and sign out.
 - **Disconnect Drive** revokes Google access, removes stored authentication metadata, and clears local data. Drive files remain untouched.
 - **Delete Voluble account** removes backend account state, sessions, encrypted tokens, folder pointers, cookies, and local caches. The selected Drive folder remains owned by the user and must be deleted manually if it is no longer wanted.
 

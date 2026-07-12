@@ -8,6 +8,8 @@ type Props = { record: VolubleRecord; timezone: string; onSave(record: VolubleRe
 export function RecordEditor({ record, timezone, onSave, onTrash, onClose }: Props) {
   const [draft, setDraft] = useState(record);
   const [eventTimezone, setEventTimezone] = useState(timezone);
+  const checklistKind = draft.category === 'Tasks' ? 'subtask' : 'shopping item';
+  const showsChecklist = draft.category === 'Tasks' || draft.category === 'Shopping Lists';
   useEffect(() => { setDraft(record); setEventTimezone(timezone); }, [record, timezone]);
   const update = <K extends keyof VolubleRecord>(key: K, value: VolubleRecord[K]) => setDraft((current) => ({ ...current, [key]: value }));
   const save = () => onSave(recordSchema.parse({
@@ -16,7 +18,10 @@ export function RecordEditor({ record, timezone, onSave, onTrash, onClose }: Pro
     event: draft.category === 'Reminders' ? draft.event : undefined,
     updatedAt: new Date().toISOString()
   }));
-  const updateItem = (id: string, value: Partial<VolubleRecord['tasks'][number]>) => update('tasks', draft.tasks.map((item) => item.id === id ? { ...item, ...value } : item));
+  const updateItem = (id: string, value: Partial<VolubleRecord['tasks'][number]>) => setDraft((current) => {
+    const tasks = current.tasks.map((item) => item.id === id ? { ...item, ...value } : item);
+    return { ...current, tasks, ...('completed' in value ? { status: tasks.length > 0 && tasks.every((item) => item.completed) ? 'completed' as const : 'active' as const } : {}) };
+  });
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="editor" role="dialog" aria-modal="true" aria-label="Edit record">
       <header><div><span className="eyebrow">Edit record</span><input className="title-input" value={draft.title} onChange={(event) => update('title', event.target.value)} /></div><button className="icon-button" onClick={onClose} aria-label="Close"><X /></button></header>
@@ -25,13 +30,13 @@ export function RecordEditor({ record, timezone, onSave, onTrash, onClose }: Pro
         <label>Status<select value={draft.status} onChange={(event) => update('status', event.target.value as VolubleRecord['status'])}><option value="active">Active</option><option value="completed">Completed</option><option value="archived">Archived</option><option value="pending-processing">Pending</option></select></label>
         <label className="wide">Tags<input value={draft.tags.join(', ')} placeholder="work, follow-up" onChange={(event) => update('tags', event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean))} /></label>
         <label className="wide">Text<textarea rows={9} value={draft.content} onChange={(event) => update('content', event.target.value)} /></label>
-        {draft.category === 'Shopping Lists' && <section className="shopping-checklist wide" aria-labelledby="shopping-items-heading">
-          <div className="shopping-checklist-heading"><div><h3 id="shopping-items-heading">Items to buy</h3><span>{draft.tasks.filter((item) => item.completed).length} of {draft.tasks.length} checked</span></div><button type="button" onClick={() => update('tasks', [...draft.tasks, { id: crypto.randomUUID(), text: '', completed: false }])}><Plus size={15} /> Add item</button></div>
+        {showsChecklist && <section className="shopping-checklist wide" aria-labelledby="checklist-items-heading">
+          <div className="shopping-checklist-heading"><div><h3 id="checklist-items-heading">{draft.category === 'Tasks' ? 'Subtasks' : 'Items to buy'}</h3><span>{draft.tasks.filter((item) => item.completed).length} of {draft.tasks.length} checked</span></div><button type="button" onClick={() => update('tasks', [...draft.tasks, { id: crypto.randomUUID(), text: '', completed: false }])}><Plus size={15} /> Add {checklistKind}</button></div>
           {draft.tasks.length ? <div className="shopping-items">{draft.tasks.map((item, index) => <div className={`shopping-item ${item.completed ? 'checked' : ''}`} key={item.id}>
-            <input type="checkbox" aria-label={`Mark ${item.text || `item ${index + 1}`} as bought`} checked={item.completed} onChange={(event) => updateItem(item.id, { completed: event.target.checked })} />
-            <input aria-label={`Shopping item ${index + 1}`} value={item.text} placeholder="Item to buy" onChange={(event) => updateItem(item.id, { text: event.target.value })} />
-            <button type="button" className="icon-button" aria-label={`Remove ${item.text || `item ${index + 1}`}`} onClick={() => update('tasks', draft.tasks.filter((candidate) => candidate.id !== item.id))}><X size={16} /></button>
-          </div>)}</div> : <p>Add each item you need to buy.</p>}
+            <input type="checkbox" aria-label={`Mark ${item.text || `${checklistKind} ${index + 1}`} as complete`} checked={item.completed} onChange={(event) => updateItem(item.id, { completed: event.target.checked })} />
+            <input aria-label={`${draft.category === 'Tasks' ? 'Subtask' : 'Shopping item'} ${index + 1}`} value={item.text} placeholder={draft.category === 'Tasks' ? 'Subtask' : 'Item to buy'} onChange={(event) => updateItem(item.id, { text: event.target.value })} />
+            <button type="button" className="icon-button" aria-label={`Remove ${item.text || `${checklistKind} ${index + 1}`}`} onClick={() => update('tasks', draft.tasks.filter((candidate) => candidate.id !== item.id))}><X size={16} /></button>
+          </div>)}</div> : <p>{draft.category === 'Tasks' ? 'Break this task into smaller steps.' : 'Add each item you need to buy.'}</p>}
         </section>}
         {draft.originalTranscript && <details className="transcript-details wide"><summary>Original transcript</summary><div>{draft.originalTranscript}</div></details>}
         {draft.category === 'Reminders' && <label className="event-toggle wide"><input type="checkbox" checked={Boolean(draft.event)} onChange={(event) => update('event', event.target.checked ? { start: new Date().toISOString(), allDay: false } : undefined)} /><Calendar size={18} /> Calendar event</label>}
