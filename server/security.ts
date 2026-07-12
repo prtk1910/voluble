@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { KeyManagementServiceClient } from '@google-cloud/kms';
+import { ExternalAccountClient, GoogleAuth } from 'google-auth-library';
+import { getVercelOidcToken } from '@vercel/oidc';
 import { config } from './config.js';
 
 export type Envelope = {
@@ -12,6 +14,29 @@ export type Envelope = {
   createdAt: string;
 };
 
+const oidcNames = ['GCP_PROJECT_NUMBER', 'GCP_SERVICE_ACCOUNT_EMAIL', 'GCP_WORKLOAD_IDENTITY_POOL_ID', 'GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID'] as const;
+
+async function kmsClient(): Promise<KeyManagementServiceClient> {
+  const usesOidc = oidcNames.some((name) => process.env[name]);
+  if (!usesOidc) return new KeyManagementServiceClient();
+  const values = Object.fromEntries(oidcNames.map((name) => {
+    const value = process.env[name];
+    if (!value) throw new Error(`Missing required environment variable for GCP workload identity: ${name}`);
+    return [name, value];
+  })) as Record<typeof oidcNames[number], string>;
+  const authClient = ExternalAccountClient.fromJSON({
+    type: 'external_account',
+    audience: `//iam.googleapis.com/projects/${values.GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${values.GCP_WORKLOAD_IDENTITY_POOL_ID}/providers/${values.GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID}`,
+    subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+    token_url: 'https://sts.googleapis.com/v1/token',
+    service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${values.GCP_SERVICE_ACCOUNT_EMAIL}:generateAccessToken`,
+    scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+    subject_token_supplier: { getSubjectToken: () => getVercelOidcToken() }
+  });
+  if (!authClient) throw new Error('Could not initialize GCP workload identity credentials.');
+  return new KeyManagementServiceClient({ auth: new GoogleAuth({ authClient }) });
+}
+
 export async function encryptEnvelope(plaintext: Buffer): Promise<Envelope> {
   const dataKey = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
@@ -19,7 +44,7 @@ export async function encryptEnvelope(plaintext: Buffer): Promise<Envelope> {
     const cipher = crypto.createCipheriv('aes-256-gcm', dataKey, iv);
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const authTag = cipher.getAuthTag();
-    const kms = new KeyManagementServiceClient();
+    const kms = await kmsClient();
     const [wrapped] = await kms.encrypt({ name: config.kmsKeyName, plaintext: dataKey });
     if (!wrapped.ciphertext) throw new Error('KMS did not return encrypted key material.');
     return {
@@ -33,7 +58,7 @@ export async function encryptEnvelope(plaintext: Buffer): Promise<Envelope> {
 }
 
 export async function withDecryptedEnvelope<T>(envelope: Envelope, operation: (plaintext: Buffer) => Promise<T>): Promise<T> {
-  const kms = new KeyManagementServiceClient();
+  const kms = await kmsClient();
   const [unwrapped] = await kms.decrypt({ name: config.kmsKeyName, ciphertext: Buffer.from(envelope.wrappedKey, 'base64') });
   if (!unwrapped.plaintext) throw new Error('KMS did not return key material.');
   const dataKey = Buffer.from(unwrapped.plaintext);

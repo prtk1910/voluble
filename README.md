@@ -186,6 +186,10 @@ For production, create and version an equivalent managed migration before direct
 | `GOOGLE_CLOUD_PROJECT` | Yes | Numeric Google Cloud project number supplied to Picker as its app ID. Despite the variable name, do not use the project ID. |
 | `GOOGLE_PICKER_API_KEY` | Yes | Origin- and API-restricted browser key for Google Picker. It is intentionally returned to the browser. |
 | `GOOGLE_KMS_KEY_NAME` | Yes | Full KMS CryptoKey resource name. |
+| `GCP_PROJECT_NUMBER` | On Vercel | Numeric project number used by Workload Identity Federation. |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | On Vercel | Service account impersonated by the Vercel workload identity. |
+| `GCP_WORKLOAD_IDENTITY_POOL_ID` | On Vercel | Workload Identity Pool ID, commonly `vercel`. |
+| `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | On Vercel | OIDC provider ID, commonly `vercel`. |
 | `POSTGRES_URL` | Yes | PostgreSQL connection string used by `@vercel/postgres`. |
 | `SESSION_SECRET` | Yes | High-entropy secret used to authenticate short-lived OAuth state tokens. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Conditional | Local path to a Google service-account JSON file. Omit when Application Default Credentials are already available. |
