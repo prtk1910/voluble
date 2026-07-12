@@ -8,6 +8,14 @@ Voluble is a responsive React PWA with Vercel serverless APIs, Google OAuth and 
 
 [Watch the Voluble demo on Google Drive](https://drive.google.com/file/d/1yM1_VAQMQtuS7MqfJzauPhgtlKk0XWUY/view?usp=sharing)
 
+## Previews
+
+| Landing page | Record library | Voice recorder |
+| --- | --- | --- |
+| [![Voluble landing page](screenshots/Landing%20Page.png)](screenshots/Landing%20Page.png) | [![Voluble record library](screenshots/All%20records.png)](screenshots/All%20records.png) | [![Voluble voice recorder](screenshots/Recorder.png)](screenshots/Recorder.png) |
+
+Select a preview to view it at full size.
+
 ## What Voluble Does
 
 - Captures up to two hours of speech without intentionally persisting audio.
@@ -26,7 +34,7 @@ Voluble is a responsive React PWA with Vercel serverless APIs, Google OAuth and 
 
 ### 1. Sign in and choose a Drive folder
 
-Select **Continue with Google**, approve the requested `drive.file` permission, and either choose an existing folder with Google Picker or create a new folder in My Drive from Voluble. Voluble creates its category structure inside the selected folder and never silently switches to a different folder.
+Select **Start with Google**, approve the requested `drive.file` permission, and either choose an existing folder with Google Picker or create a new folder in My Drive from Voluble. Voluble creates its category structure inside the selected folder and never silently switches to a different folder.
 
 The resulting structure is:
 
